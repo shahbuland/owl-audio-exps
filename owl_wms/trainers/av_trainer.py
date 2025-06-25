@@ -145,18 +145,22 @@ class AVRFTTrainer(BaseTrainer):
         
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
+        if self.train_cfg.data_id == "cod_s3_mixed":
+            loader.dataset.sleep_until_queues_filled()
+            self.barrier()
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
         local_step = 0
         for _ in range(self.train_cfg.epochs):
-            for batch_vid, batch_audio, batch_mouse, batch_btn in loader:
+            for batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask in loader:
                 batch_vid = batch_vid.cuda().bfloat16() / self.train_cfg.vae_scale
                 batch_audio = batch_audio.cuda().bfloat16() / self.train_cfg.audio_vae_scale
                 batch_mouse = batch_mouse.cuda().bfloat16()
                 batch_btn = batch_btn.cuda().bfloat16()
+                cfg_mask = cfg_mask.cuda()
 
                 with ctx:
-                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
+                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn, has_controls=cfg_mask) / accum_steps
 
                 self.scaler.scale(loss).backward()
                 #find_unused_params(self.model)

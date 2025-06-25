@@ -36,6 +36,7 @@ class AVWindowSampler:
         # audio is [b,n,c] and should be treated same as video (it'e being generated)
         # mouse is [b,n,2]
         # btn is [b,n,n_button]
+        # cfg mask is [b,] bool, true if controls were given, false if not
 
         # output will be [b,n+self.num_frames,c,h,w]
         

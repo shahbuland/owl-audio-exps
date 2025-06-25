@@ -176,9 +176,10 @@ class ControlEmbedding(nn.Module):
         self.mouse = MouseEmbedding(dim_out, dim)
         self.button = ButtonEmbeddding(n_buttons, dim_out, dim)
 
-    def forward(self, mouse, button):
+    def forward(self, mouse, button, has_controls=None):
         # mouse : [b,n,2]
         # button : [b,n,n_buttons]
+        # has_controls : [b,] boolean mask
 
         # out is [b,n,d]
 
