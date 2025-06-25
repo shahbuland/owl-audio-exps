@@ -103,7 +103,8 @@ class GameRFTAudio(nn.Module):
             needed_frac = needed / has_controls.float().mean()
             
             # Only drop controls where has_controls is True
-            mask = (torch.rand(b, device=x.device) <= needed_frac) & has_controls
+            b = has_controls.shape[0]
+            mask = (torch.rand(b, device=has_controls.device) <= needed_frac) & has_controls
             
             # Update has_controls based on mask
             has_controls = has_controls & (~mask)
