@@ -36,8 +36,7 @@ class AVWindowSampler:
         # audio is [b,n,c] and should be treated same as video (it'e being generated)
         # mouse is [b,n,2]
         # btn is [b,n,n_button]
-        # cfg mask is [b,] bool, true if controls were given, false if not
-
+        
         # output will be [b,n+self.num_frames,c,h,w]
         
         sampling_steps = self.n_steps
@@ -72,26 +71,25 @@ class AVWindowSampler:
             mouse = extended_mouse[:,frame_idx:frame_idx+self.window_length]
             btn = extended_btn[:,frame_idx:frame_idx+self.window_length]
 
-            mouse_batch = torch.cat([mouse, torch.zeros_like(mouse)], dim=0) 
-            btn_batch = torch.cat([btn, torch.zeros_like(btn)], dim=0)
+            # Create masks for conditional and unconditional branches
+            b = local_history.shape[0]
+            uncond_mask = torch.zeros(b, dtype=torch.bool, device=local_history.device)
+            cond_mask = torch.ones(b, dtype=torch.bool, device=local_history.device)
+
             for _ in range(sampling_steps):
-                # CFG Branches
                 x = local_history.clone()
                 a = local_audio.clone()
                 ts = ts_history.clone()
 
-                x_batch = torch.cat([x, x], dim=0)
-                a_batch = torch.cat([a, a], dim=0)
-                ts_batch = torch.cat([ts, ts], dim=0)
+                # Get unconditional predictions
+                pred_video_uncond, pred_audio_uncond = model(x, a, ts, mouse, btn, has_controls=uncond_mask)
                 
-                pred_video_batch, pred_audio_batch = model(x_batch, a_batch, ts_batch, mouse_batch, btn_batch)
-                
-                # Split predictions back into conditional and unconditional
-                cond_pred_video, uncond_pred_video = pred_video_batch.chunk(2)
-                cond_pred_audio, uncond_pred_audio = pred_audio_batch.chunk(2)
+                # Get conditional predictions
+                pred_video_cond, pred_audio_cond = model(x, a, ts, mouse, btn, has_controls=cond_mask)
 
-                pred_video = uncond_pred_video + self.cfg_scale * (cond_pred_video - uncond_pred_video)
-                pred_audio = uncond_pred_audio + self.cfg_scale * (cond_pred_audio - uncond_pred_audio)
+                # Apply CFG
+                pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
+                pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
                 
                 x = x - pred_video*dt
                 a = a - pred_audio*dt

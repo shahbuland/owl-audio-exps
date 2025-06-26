@@ -31,7 +31,7 @@ class GameRFTAudioCore(nn.Module):
 
         self.null_emb = nn.Parameter(torch.randn(config.d_model)*0.02)
 
-    def forward(self, x, audio, t, mouse, btn, has_controls = None):
+    def forward(self, x, audio, t, mouse, btn, has_controls = None, kv_cache = None):
         # x is [b,n,c,h,w]
         # audio is [b,n,c]
         # t is [b,n]
@@ -57,7 +57,7 @@ class GameRFTAudioCore(nn.Module):
         x = torch.cat([x, audio], dim = -2)
         x = eo.rearrange(x, 'b n f d -> b (n f) d')
 
-        x = self.transformer(x, cond)
+        x = self.transformer(x, cond, kv_cache)
 
         # Split into video and audio tokens
         x = eo.rearrange(x, 'b (n f) d -> b n f d', n=n)
@@ -151,7 +151,8 @@ class GameRFTAudio(nn.Module):
                 'pred_audio': pred_audio,
                 'ts': ts,
                 'z_video': z_video,
-                'z_audio': z_audio
+                'z_audio': z_audio,
+                'cfg_mask' : has_controls 
             }
 
 if __name__ == "__main__":

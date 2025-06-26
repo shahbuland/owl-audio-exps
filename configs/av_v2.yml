@@ -26,6 +26,14 @@ train:
     cond_prefix: labelled
     uncond_prefix: unlabelled
     file_share_max: 50
+    unlabelled_frac: 0.3
+
+  sample_data_id: cod_s3_audio
+  sample_data_kwargs:
+    window_length: 30
+    bucket_name: cod-latent-depth-4x4
+    prefix: labelled
+    file_share_max: 50
 
   target_batch_size: 256
   batch_size: 32

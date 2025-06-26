@@ -54,7 +54,7 @@ class Attn(nn.Module):
             mask = None
         else:
             mask = create_block_causal_mask(x.shape[1], self.tokens_per_frame).to(x.device)
-            mask = mask.to(device=x.device,dtype=x.dtype)
+            mask = mask.to(device=x.device).bool()
             mask = mask.unsqueeze(0).repeat(x.shape[0], 1, 1)
             mask = mask.unsqueeze(1)
 
@@ -248,4 +248,6 @@ def test_kv_cache():
     print("Cache test complete")
 
 if __name__ == "__main__":
+    import os
+    os.environ['KMP_DUPLICATE_LIB_OK'] = "TRUE"
     test_attn_mask()
