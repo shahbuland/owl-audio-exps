@@ -145,6 +145,9 @@ class AVRFTTrainer(BaseTrainer):
         
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
+        sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.n_samples, **self.train_cfg.sample_data_kwargs)
+        sample_loader = iter(sample_loader)
+
         if self.train_cfg.data_id == "cod_s3_mixed":
             loader.dataset.sleep_until_queues_filled()
             self.barrier()
@@ -192,13 +195,15 @@ class AVRFTTrainer(BaseTrainer):
                         # Sampling commented out for now
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx, torch.no_grad():
+
+                                vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
                                 n_samples = self.train_cfg.n_samples
                                 samples, audio, sample_mouse, sample_button = sampler(
                                     get_ema_core(),
-                                    batch_vid[:n_samples],
-                                    batch_audio[:n_samples],
-                                    batch_mouse[:n_samples],
-                                    batch_btn[:n_samples],
+                                    vid_for_sample,
+                                    aud_for_sample,
+                                    mouse_for_sample,
+                                    btn_for_sample,
                                     decode_fn,
                                     audio_decode_fn,
                                     self.train_cfg.vae_scale,
