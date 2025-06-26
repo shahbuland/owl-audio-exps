@@ -12,3 +12,6 @@ def get_sampler_cls(sampler_id):
     elif sampler_id == "av_window":
         from .av_window import AVWindowSampler
         return AVWindowSampler
+    elif sampler_id == "av_caching":
+        from .av_caching import AVCachingSampler
+        return AVCachingSampler

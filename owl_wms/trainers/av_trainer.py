@@ -200,10 +200,10 @@ class AVRFTTrainer(BaseTrainer):
                                 n_samples = self.train_cfg.n_samples
                                 samples, audio, sample_mouse, sample_button = sampler(
                                     get_ema_core(),
-                                    vid_for_sample,
-                                    aud_for_sample,
-                                    mouse_for_sample,
-                                    btn_for_sample,
+                                    vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
+                                    aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
+                                    mouse_for_sample.bfloat16().cuda(),
+                                    btn_for_sample.bfloat16().cuda(),
                                     decode_fn,
                                     audio_decode_fn,
                                     self.train_cfg.vae_scale,

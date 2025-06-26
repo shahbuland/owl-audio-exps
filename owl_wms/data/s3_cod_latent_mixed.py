@@ -53,9 +53,12 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
         # Initialize separate queues for conditional and unconditional data
         self.cond_tar_queue = RandomizedQueue()
-        self.uncond_tar_queue = RandomizedQueue()
         self.cond_data_queue = RandomizedQueue()
-        self.uncond_data_queue = RandomizedQueue()
+        
+        # Only initialize uncond queues if we're using them
+        if unlabelled_frac > 0:
+            self.uncond_tar_queue = RandomizedQueue()
+            self.uncond_data_queue = RandomizedQueue()
 
         # Setup S3 client
         self.s3_client = boto3.client(
@@ -68,18 +71,22 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
         # Get list of available tars
         self.cond_tars = self.list_tars(self.cond_prefix)
-        self.uncond_tars = self.list_tars(self.uncond_prefix)
+        if unlabelled_frac > 0:
+            self.uncond_tars = self.list_tars(self.uncond_prefix)
 
         # Start background threads
         self.cond_tar_thread = threading.Thread(target=lambda: self.background_download_tars(True), daemon=True)
-        self.uncond_tar_thread = threading.Thread(target=lambda: self.background_download_tars(False), daemon=True)
         self.cond_data_thread = threading.Thread(target=lambda: self.background_load_data(True), daemon=True)
-        self.uncond_data_thread = threading.Thread(target=lambda: self.background_load_data(False), daemon=True)
         
         self.cond_tar_thread.start()
-        self.uncond_tar_thread.start()
         self.cond_data_thread.start()
-        self.uncond_data_thread.start()
+
+        # Only start uncond threads if we're using them
+        if unlabelled_frac > 0:
+            self.uncond_tar_thread = threading.Thread(target=lambda: self.background_download_tars(False), daemon=True)
+            self.uncond_data_thread = threading.Thread(target=lambda: self.background_load_data(False), daemon=True)
+            self.uncond_tar_thread.start()
+            self.uncond_data_thread.start()
 
     def list_tars(self, prefix):
         tars = []
@@ -114,19 +121,28 @@ class S3CoDLatentAudioDataset(IterableDataset):
     def sleep_until_queues_filled(self):
         while True:
             cond_tar_filled = len(self.cond_tar_queue.items) >= self.max_tars
-            uncond_tar_filled = len(self.uncond_tar_queue.items) >= self.max_tars
             cond_data_filled = len(self.cond_data_queue.items) >= self.max_data
-            uncond_data_filled = len(self.uncond_data_queue.items) >= self.max_data
             
-            if all([cond_tar_filled, uncond_tar_filled, cond_data_filled, uncond_data_filled]):
+            if self.unlabelled_frac > 0:
+                uncond_tar_filled = len(self.uncond_tar_queue.items) >= self.max_tars
+                uncond_data_filled = len(self.uncond_data_queue.items) >= self.max_data
+                all_filled = all([cond_tar_filled, uncond_tar_filled, cond_data_filled, uncond_data_filled])
+            else:
+                all_filled = all([cond_tar_filled, cond_data_filled])
+                
+            if all_filled:
                 break
                 
             time.sleep(1)
             
             if self.verbose:
-                print(f"Waiting for queues to fill... Tar queues: {len(self.cond_tar_queue.items)}/{self.max_tars}, " + 
-                      f"{len(self.uncond_tar_queue.items)}/{self.max_tars}, Data queues: {len(self.cond_data_queue.items)}/{self.max_data}, " +
-                      f"{len(self.uncond_data_queue.items)}/{self.max_data}")
+                status = f"Waiting for queues to fill... Tar queues: {len(self.cond_tar_queue.items)}/{self.max_tars}, "
+                if self.unlabelled_frac > 0:
+                    status += f"{len(self.uncond_tar_queue.items)}/{self.max_tars}, "
+                status += f"Data queues: {len(self.cond_data_queue.items)}/{self.max_data}"
+                if self.unlabelled_frac > 0:
+                    status += f", {len(self.uncond_data_queue.items)}/{self.max_data}"
+                print(status)
 
     def process_tensor_file(self, tar, base_name, suffix):
         try:
@@ -203,16 +219,22 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
     def __iter__(self):
         while True:
-            # Sample based on unlabelled_frac
-            should_be_uncond = random.random() < self.unlabelled_frac
-            if should_be_uncond:
-                item = self.uncond_data_queue.pop()
-                if item is None and self.verbose:
-                    print(f"Uncond queue empty! Queue sizes - Cond: {len(self.cond_data_queue.items)}, Uncond: {len(self.uncond_data_queue.items)}")
-            else:
+            # If unlabelled_frac is 0, only use conditional data
+            if self.unlabelled_frac == 0:
                 item = self.cond_data_queue.pop()
                 if item is None and self.verbose:
-                    print(f"Cond queue empty! Queue sizes - Cond: {len(self.cond_data_queue.items)}, Uncond: {len(self.uncond_data_queue.items)}")
+                    print(f"Cond queue empty! Queue size: {len(self.cond_data_queue.items)}")
+            else:
+                # Sample based on unlabelled_frac
+                should_be_uncond = random.random() < self.unlabelled_frac
+                if should_be_uncond:
+                    item = self.uncond_data_queue.pop()
+                    if item is None and self.verbose:
+                        print(f"Uncond queue empty! Queue sizes - Cond: {len(self.cond_data_queue.items)}, Uncond: {len(self.uncond_data_queue.items)}")
+                else:
+                    item = self.cond_data_queue.pop()
+                    if item is None and self.verbose:
+                        print(f"Cond queue empty! Queue sizes - Cond: {len(self.cond_data_queue.items)}, Uncond: {len(self.uncond_data_queue.items)}")
                     
             if item is not None:
                 yield item

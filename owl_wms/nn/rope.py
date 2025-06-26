@@ -47,7 +47,7 @@ class VideoRoPE(nn.Module):
         
         return q, k
 
-class FlatVideoRoPE(nn.Module):
+class _FlatVideoRoPE(nn.Module):
     """
     Half-flat of RoPE that treats [n_frames, tokens_per_frame] as [n_frames, tokens_per_frame] image
     """
@@ -94,4 +94,37 @@ class FlatVideoRoPE(nn.Module):
         return q,k
 
 
+class FlatVideoRoPE(nn.Module):
+    """
+    RoPE that only rotates based on frame index, ignoring position within frames
+    """
+    def __init__(self, config):
+        super().__init__()
 
+        dim_head = config.d_model // config.n_heads
+        self.pos_emb = RotaryEmbedding(
+            dim = dim_head//2, # Using half dimension since we only need 1D rotation
+            freqs_for='pixel',
+            max_freq=256
+        )
+
+        self.m = config.tokens_per_frame
+
+    def forward(self, q, k):
+        # q|k is [b,h,n_frames*tokens_per_frame,d]
+        n = k.shape[2]//self.m  # Number of frames
+        m = self.m             # Tokens per frame
+
+        # Reshape to [b,h,n,m*d]
+        q = eo.rearrange(q, 'b h (n m) d -> b h n (m d)', m=m)
+        k = eo.rearrange(k, 'b h (n m) d -> b h n (m d)', m=m)
+
+        # Apply rotary embeddings
+        q = self.pos_emb.rotate_queries_or_keys(q)
+        k = self.pos_emb.rotate_queries_or_keys(k)
+
+        # Reshape back
+        q = eo.rearrange(q, 'b h n (m d) -> b h (n m) d', m=m)
+        k = eo.rearrange(k, 'b h n (m d) -> b h (n m) d', m=m)
+
+        return q, k
