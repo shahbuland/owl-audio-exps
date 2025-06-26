@@ -100,7 +100,7 @@ class RolloutHandler:
     
         return context_video, context_audio
             
-class CausVidTrainer(BaseTrainer):
+class SelfForceTrainer(BaseTrainer):
     """
     CausVid Trainer
 

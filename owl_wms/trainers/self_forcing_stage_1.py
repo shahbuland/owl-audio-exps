@@ -44,6 +44,7 @@ class CausalDistillationTrainer(BaseTrainer):
         self.teacher = get_model_cls(model_id)(teacher_cfg)
 
         self.teacher.load_state_dict(versatile_load(self.train_cfg.teacher_ckpt))
+        self.student.load_state_dict(versatile_load(self.train_cfg.teacher_ckpt))
         freeze(self.teacher)
 
         # Print model size
