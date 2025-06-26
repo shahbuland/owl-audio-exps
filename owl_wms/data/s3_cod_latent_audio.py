@@ -27,13 +27,10 @@ class RandomizedQueue:
         idx = random.randint(0, len(self.items) - 1)
         return self.items.pop(idx)
 
-TOTAL_SHARDS = 1
-NUM_SUBDIRS=1
-NUM_TARS=9
-BUCKET_NAME="cod-data-latent-360x640to4x4"
-
 class S3CoDLatentAudioDataset(IterableDataset):
-    def __init__(self, window_length=120, file_share_max=20, rank=0, world_size=1, bucket_name = BUCKET_NAME):
+    def __init__(self, window_length=120, file_share_max=20, rank=0, world_size=1, 
+                 bucket_name="cod-latent-depth-4x4",
+                 prefix="labelled"):
         super().__init__()
         
         self.window = window_length
@@ -41,6 +38,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.rank = rank
         self.world_size = world_size
         self.bucket_name = bucket_name
+        self.prefix = prefix
 
         # Queue parameters
         self.max_tars = 2
@@ -59,27 +57,30 @@ class S3CoDLatentAudioDataset(IterableDataset):
             region_name=os.environ['AWS_REGION'],
         )
 
+        # Get list of available tars
+        self.tars = self.list_tars(self.prefix)
+
         # Start background threads
         self.tar_thread = threading.Thread(target=self.background_download_tars, daemon=True)
         self.data_thread = threading.Thread(target=self.background_load_data, daemon=True)
         self.tar_thread.start()
         self.data_thread.start()
 
-    def random_sample_prefix(self):
-        # For now just 2 shards (00, 01)
-        shard = random.randint(0, TOTAL_SHARDS-1)
-        # Each shard has 1000 subdirs
-        subdir = random.randint(0, NUM_SUBDIRS-1)
-        # Each subdir has multiple tars
-        tar_num = random.randint(0, NUM_TARS-1)
-        return f"{shard:02d}/{subdir:04d}/{tar_num:04d}.tar"
+    def list_tars(self, prefix):
+        tars = []
+        paginator = self.s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    if obj['Key'].endswith('.tar'):
+                        tars.append(obj['Key'])
+        return tars
 
     def background_download_tars(self):
         while True:
             if len(self.tar_queue.items) < self.max_tars:
-                tar_path = self.random_sample_prefix()
+                tar_path = random.choice(self.tars)
                 try:
-                    # Download tar directly to memory
                     response = self.s3_client.get_object(Bucket=self.bucket_name, Key=tar_path)
                     tar_data = response['Body'].read()
                     self.tar_queue.add(tar_data)
