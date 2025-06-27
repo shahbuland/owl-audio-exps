@@ -19,6 +19,8 @@ class GameRFTAudioCore(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.config = config
+
         self.transformer = DiT(config)
         self.control_embed = ControlEmbedding(config.n_buttons, config.d_model)
         self.t_embed = TimestepEmbedding(config.d_model)

@@ -81,7 +81,7 @@ train:
   audio_vae_cfg_path: configs/owl_vaes/audio_ae_2.yml
   audio_vae_ckpt_path: checkpoints/owl_vaes/200m_codaudio_75k_ema.pt
 
-  teacher_ckpt: checkpoints/av_v2/step_30000.pt
+  teacher_ckpt: checkpoints/av_v2/step_20000.pt
 
 wandb:
   name: shahbuland

@@ -10,5 +10,7 @@ def get_trainer_cls(trainer_id):
         return AVRFTTrainer
     if trainer_id == "sforce1":
         from .self_forcing_stage_1 import CausalDistillationTrainer
+        return CausalDistillationTrainer
     if trainer_id == "sforce2":
         from .self_forcing_stage_2 import SelfForceTrainer
+        return SelfForceTrainer

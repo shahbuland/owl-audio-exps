@@ -247,7 +247,7 @@ def collate_fn(batch):
     
     latents = torch.stack(latents)      # [b,n,c,h,w]
     mouses = torch.stack(mouses)        # [b,n,2] 
-    buttons = torch.stack(buttons)      # [b,n,n_buttons]
+    buttons = torch.stack(buttons).float()      # [b,n,n_buttons]
     audios = torch.stack(audios)        # [b,n,d]
     has_controls = torch.tensor(has_controls, dtype=torch.bool)  # [b,]
     

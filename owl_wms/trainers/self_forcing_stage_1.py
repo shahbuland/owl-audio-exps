@@ -14,7 +14,7 @@ from ..schedulers import get_scheduler_cls
 from ..models import get_model_cls
 from ..sampling import get_sampler_cls
 from ..data import get_loader
-from ..utils.logging import LogHelper, to_wandb
+from ..utils.logging import LogHelper, to_wandb, to_wandb_av
 from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 
@@ -44,7 +44,7 @@ class CausalDistillationTrainer(BaseTrainer):
         self.teacher = get_model_cls(model_id)(teacher_cfg)
 
         self.teacher.load_state_dict(versatile_load(self.train_cfg.teacher_ckpt))
-        self.student.load_state_dict(versatile_load(self.train_cfg.teacher_ckpt))
+        self.model.load_state_dict(versatile_load(self.train_cfg.teacher_ckpt))
         freeze(self.teacher)
 
         # Print model size
@@ -73,7 +73,7 @@ class CausalDistillationTrainer(BaseTrainer):
         freeze(self.decoder)
         freeze(self.audio_decoder)
 
-        self.teacher.core = torch.compile(self.teacher.core, mode = 'max-autotune', fullgraph = True, dynamic = False)
+        #self.teacher.core = torch.compile(self.teacher.core, mode = 'max-autotune', fullgraph = True, dynamic = False)
 
     def save(self):
         save_dict = {
@@ -137,11 +137,17 @@ class CausalDistillationTrainer(BaseTrainer):
                 return self.ema.ema_model.core
 
         # Set up optimizer and scheduler
-        self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
+        if self.train_cfg.opt.lower() == "muon":
+            self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
+        else:
+            self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
 
         if self.train_cfg.scheduler is not None:
             self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)
 
+        # Grad accum setup and scaler
+        accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
+        accum_steps = max(1, accum_steps)
         self.scaler = torch.amp.GradScaler()
         ctx = torch.amp.autocast('cuda',torch.bfloat16)
 
@@ -156,8 +162,9 @@ class CausalDistillationTrainer(BaseTrainer):
         
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
-        sampler = get_sampler_cls(self.train_cfg.sampler_id)()
+        sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
+        local_step = 0
         for batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask in loader:
             batch_vid = batch_vid.cuda().bfloat16() / self.train_cfg.vae_scale
             batch_audio = batch_audio.cuda().bfloat16() / self.train_cfg.audio_vae_scale
@@ -169,64 +176,68 @@ class CausalDistillationTrainer(BaseTrainer):
                 # Student causal predictions
                 student_out = self.model(batch_vid,batch_audio,batch_mouse,batch_btn,has_controls=cfg_mask, return_dict=True)
                 with torch.no_grad():
-                    teacher_out = self.teacher.core(
+                    teacher_video_pred, teacher_audio_pred = self.teacher.core(
                         student_out['lerpd_video'],
                         student_out['lerpd_audio'],
                         student_out['ts'],
                         batch_mouse,
                         batch_btn,
-                        student_out['cfg_mask']
+                        student_out['cfg_mask'],
                     )
-                    teacher_video_pred = teacher_out['pred_video']
-                    teacher_audio_pred = teacher_out['pred_audio']
                 
                 video_loss = F.mse_loss(student_out['pred_video'], teacher_video_pred)
                 audio_loss = F.mse_loss(student_out['pred_audio'], teacher_audio_pred)
-                loss = 0.5 * (video_loss + audio_loss)
+                loss = 0.5 * (video_loss + audio_loss) / accum_steps
 
             self.scaler.scale(loss).backward()
             metrics.log('loss', loss)
 
-            self.scaler.unscale_(self.opt)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            local_step += 1
+            if local_step % accum_steps == 0:
+                # Updates
+                if self.train_cfg.opt.lower() != "muon":
+                    self.scaler.unscale_(self.opt)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
-            self.scaler.step(self.opt)
-            self.opt.zero_grad(set_to_none=True)
+                self.scaler.step(self.opt)
+                self.opt.zero_grad(set_to_none=True)
 
-            self.scaler.update()
+                self.scaler.update()
 
-            if self.scheduler is not None:
-                self.scheduler.step()
-            self.ema.update()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                self.ema.update()
 
-            # Do logging
-            with torch.no_grad():
-                wandb_dict = metrics.pop()
-                wandb_dict['time'] = timer.hit()
-                timer.reset()
+                # Do logging
+                with torch.no_grad():
+                    wandb_dict = metrics.pop()
+                    wandb_dict['time'] = timer.hit()
+                    timer.reset()
 
-                if self.total_step_counter % self.train_cfg.sample_interval == 0:
-                    with ctx, torch.no_grad():
-                        n_samples = self.train_cfg.n_samples
-                        samples, sample_mouse, sample_button = sampler(
-                            get_ema_core(),
-                            batch_vid[:n_samples],
-                            batch_audio[:n_samples],
-                            batch_mouse[:n_samples],
-                            batch_btn[:n_samples],
-                            decode_fn,
-                            audio_decode_fn,
-                            self.train_cfg.vae_scale,
-                            self.train_cfg.audio_vae_scale
-                        )
-                        if self.rank == 0: wandb_dict['samples'] = to_wandb(samples, sample_mouse, sample_button)
+                    if self.total_step_counter % self.train_cfg.sample_interval == 0:
+                        with ctx, torch.no_grad():
+                            n_samples = self.train_cfg.n_samples
+                            samples, audio, sample_mouse, sample_button = sampler(
+                                get_ema_core(),
+                                batch_vid[:n_samples],
+                                batch_audio[:n_samples], 
+                                batch_mouse[:n_samples],
+                                batch_btn[:n_samples],
+                                decode_fn,
+                                audio_decode_fn,
+                                self.train_cfg.vae_scale,
+                                self.train_cfg.audio_vae_scale
+                            )
+                            if self.rank == 0:
+                                video = to_wandb_av(samples, audio, sample_mouse, sample_button)
+                                wandb_dict['samples'] = video
+                        
+                    if self.rank == 0:
+                        wandb.log(wandb_dict)
+
+                self.total_step_counter += 1
+                if self.total_step_counter % self.train_cfg.save_interval == 0:
+                    if self.rank == 0:
+                        self.save()
                     
-                if self.rank == 0:
-                    wandb.log(wandb_dict)
-
-            self.total_step_counter += 1
-            if self.total_step_counter % self.train_cfg.save_interval == 0:
-                if self.rank == 0:
-                    self.save()
-                
-            self.barrier()
+                self.barrier()
