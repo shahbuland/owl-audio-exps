@@ -64,7 +64,7 @@ class KVCache:
     @torch.no_grad()
     def truncate(self, truncate_amt):
         """
-        Truncate frames from the KV cache
+        Truncate/eject frames from the KV cache
         """
         truncate_amt = truncate_amt * self.config.tokens_per_frame
         def tuple_truncate(k, v):

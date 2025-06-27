@@ -44,7 +44,7 @@ class RolloutHandler:
         audio,
         mouse,
         btn,
-        cfg_mask
+        disable_inner_grad = True
     ):
         kv_cache = KVCache(self.model_cfg)
         kv_cache.reset(self.batch_size)
@@ -63,7 +63,7 @@ class RolloutHandler:
         b,n,_,_,_ = context_video.shape
         kv_cache.enable_cache_updates()
         ts = torch.ones_like(context_video[:,:,0,0,0])
-        _ = model(context_video, context_audio, ts, context_mouse, context_btn, has_controls=cfg_mask, kv_cache=kv_cache)
+        _ = model(context_video, context_audio, ts, context_mouse, context_btn, kv_cache=kv_cache)
         kv_cache.disable_cache_updates()
 
         # timesteps from 0.25,0.5,0.75,1.0
@@ -85,19 +85,25 @@ class RolloutHandler:
                 return ts[0,0].item() <= s
             
             while not do_terminate():
-                vid_pred, aud_pred = model(new_frame, new_audio, ts, new_mouse, new_btn, has_controls=cfg_mask, kv_cache=kv_cache)
+                vid_pred, aud_pred = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
                 new_frame -= dt * vid_pred
                 new_audio -= dt * aud_pred
                 ts -= dt
 
-            with torch.enable_grad():
+            def sample_terminal():
                 kv_cache.enable_cache_updates()
-                vid_pred, aud_pred = model(new_frame, new_audio, ts, new_mouse, new_btn, has_controls=cfg_mask, kv_cache=kv_cache)
+                vid_pred, aud_pred = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
                 kv_cache.disable_cache_updates()
-                new_frame -= dt * vid_pred
-                new_audio -= dt * aud_pred
-                context_video = torch.cat([context_video, new_frame], dim = 1)
-                context_audio = torch.cat([context_audio, new_audio], dim = 1)
+                return (
+                    torch.cat([context_video, new_frame - dt*vid_pred], dim = 1),
+                    torch.cat([context_audio, new_audio - dt*aud_pred], dim = 1)
+                )
+            
+            if disable_inner_grad:
+                context_video, context_audio = sample_terminal()
+            else:
+                with torch.enable_grad():
+                    context_video, context_audio = sample_terminal()
     
         return context_video, context_audio
             
@@ -129,6 +135,7 @@ class SelfForceTrainer(BaseTrainer):
         self.model.load_state_dict(versatile_load(self.train_cfg.student_ckpt))
         self.score_real.load_state_dict(versatile_load(self.train_cfg.teacher_ckpt))
         self.score_fake = deepcopy(self.score_real)
+        self.score_fake.cfg_prob = 0.0 # No cfg needed for this one
         freeze(self.score_real)
 
         self.model = self.model.core
@@ -178,12 +185,9 @@ class SelfForceTrainer(BaseTrainer):
     
     def load(self):
         has_ckpt = False
-        try:
-            if self.train_cfg.resume_ckpt is not None:
-                save_dict = super().load(self.train_cfg.resume_ckpt)
-                has_ckpt = True
-        except:
-            print("Error loading checkpoint")
+        if hasattr(self.train_cfg, 'resume_ckpt') and self.train_cfg.resume_ckpt is not None:
+            save_dict = super().load(self.train_cfg.resume_ckpt)
+            has_ckpt = True
         
         if not has_ckpt:
             return
@@ -211,22 +215,22 @@ class SelfForceTrainer(BaseTrainer):
         self.score_fake = self.score_fake.cuda().train()
 
         if self.world_size > 1:
-            self.model = DDP(self.model)
-            self.score_fake = DDP(self.score_fake)
+            self.model = DDP(self.model, find_unused_parameters=True)
+            self.score_fake = DDP(self.score_fake, find_unused_parameters=True)
 
         freeze(self.decoder)
         freeze(self.audio_decoder)
         freeze(self.score_real)
 
-        #torch.compile(self.score_real, dynamic = False)
+        #self.score_real = torch.compile(self.score_real, dynamic = False)
 
         decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
         audio_decode_fn = make_batched_audio_decode_fn(self.audio_decoder, self.train_cfg.vae_batch_size)
 
         self.ema = EMA(
             self.model,
-            beta = 0.999,
-            update_after_step = 0,
+            beta = 0.99,
+            update_after_step = 200,
             update_every = 1
         )
         # Hard coded stuff, probably #TODO figure out where to put this?
@@ -241,7 +245,7 @@ class SelfForceTrainer(BaseTrainer):
 
         # Don't use MUON pls
         self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
-        self.s_fake_opt = getattr(torch.optim, self.train_cfg.opt)(self.score_fake.parameters(), **self.train_cfg.opt_kwargs)
+        self.s_fake_opt = getattr(torch.optim, self.train_cfg.opt)(self.score_fake.parameters(), **self.train_cfg.d_opt_kwargs)
 
         if self.train_cfg.scheduler is not None:
             self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)
@@ -267,7 +271,7 @@ class SelfForceTrainer(BaseTrainer):
 
         # Simplifiying assumptions: data will never stop iter, no grad accum
 
-        def sample_from_gen(vid, audio, mouse, btn, cfg_mask):
+        def sample_from_gen(vid, audio, mouse, btn, disable_inner_grad=True):
             # Use rollout handler to generate samples
             video_samples, audio_samples = rollouts(
                 self.model,
@@ -275,7 +279,7 @@ class SelfForceTrainer(BaseTrainer):
                 audio, 
                 mouse,
                 btn,
-                cfg_mask
+                disable_inner_grad
             )
             return video_samples, audio_samples
 
@@ -330,8 +334,8 @@ class SelfForceTrainer(BaseTrainer):
             aud_normalizer = torch.abs(p_real_aud).mean(dim=[1,2],keepdim=True)
             grad_aud = grad_aud / (aud_normalizer + 1.0e-6)
 
-            #grad_vid = torch.nan_to_num(grad_vid)
-            #grad_aud = torch.nan_to_num(grad_aud)
+            grad_vid = torch.nan_to_num(grad_vid)
+            grad_aud = torch.nan_to_num(grad_aud)
 
             grad_mask = torch.ones_like(vid[:,:,0,0,0])  # [b,n]
             grad_mask[:,:n_context_frames] = 0  # Zero out context frames
@@ -351,8 +355,8 @@ class SelfForceTrainer(BaseTrainer):
             # Return average loss
             return (vid_loss + aud_loss) / 2
         
-        def optimizer_step(loss, model, scaler, optimizer):
-            scaler.scale(loss).backward()
+        def optimizer_step(model, scaler, optimizer):
+            # Assumes loss.backward() was already called
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
@@ -362,33 +366,51 @@ class SelfForceTrainer(BaseTrainer):
         def convert(inputs, device, dtype):
             return [x.to(device=device, dtype=dtype if not x.dtype == torch.bool else x.dtype) for x in inputs]
 
+        # Gradient accumulation setup
+        accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
+        accum_steps = max(1, accum_steps)
+        local_step = 0
+
         loader = iter(loader)
         while True:
             freeze(self.model)
             unfreeze(self.score_fake)
+            
+            # Score fake training loop with grad accum
             for _ in range(self.update_ratio):
-                batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask = convert(next(loader), 'cuda', torch.bfloat16)
- 
-                with ctx:
-                    with torch.no_grad():
-                        video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask)
-                    
-                    s_fake_loss = self.score_fake(video_samples, audio_samples, batch_mouse, batch_btn, has_controls=cfg_mask)
+                for _ in range(accum_steps):
+                    batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask = convert(next(loader), 'cuda', torch.bfloat16)
+     
+                    with ctx:
+                        with torch.no_grad():
+                            video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn)
+                        
+                        s_fake_loss = self.score_fake(video_samples, audio_samples, batch_mouse, batch_btn)
+                        self.s_fake_scaler.scale(s_fake_loss / accum_steps).backward()
 
-                optimizer_step(s_fake_loss, self.score_fake, self.s_fake_scaler, self.s_fake_opt)
+                    metrics.log('s_fake_loss', s_fake_loss/accum_steps)
 
-            metrics.log('s_fake_loss', s_fake_loss)
+                # Only do optimization step after accumulation
+                optimizer_step(self.score_fake, self.s_fake_scaler, self.s_fake_opt)
+
+
             unfreeze(self.model)
             freeze(self.score_fake)
         
-            batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask = convert(next(loader), 'cuda', torch.bfloat16)
+            # Generator training with grad accum
+            for _ in range(accum_steps):
+                batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask = convert(next(loader), 'cuda', torch.bfloat16)
 
-            with ctx:
-                video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask)
-                dmd_loss = get_dmd_loss(video_samples, audio_samples, batch_mouse, batch_btn)
-                metrics.log('dmd_loss', dmd_loss)
+                with ctx:
+                    video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, disable_inner_grad=False)
+                    dmd_loss = get_dmd_loss(video_samples, audio_samples, batch_mouse, batch_btn)
+                    self.scaler.scale(dmd_loss / accum_steps).backward()
                 
-            optimizer_step(dmd_loss, self.model, self.scaler, self.opt)
+                metrics.log('dmd_loss', dmd_loss/accum_steps)
+
+            # Only do optimization step after accumulation
+            optimizer_step(self.model, self.scaler, self.opt)
+            
             self.ema.update()
 
             with torch.no_grad():
@@ -396,26 +418,26 @@ class SelfForceTrainer(BaseTrainer):
                 wandb_dict['time'] = timer.hit()
                 timer.reset()
 
-                if self.total_step_counter % self.train_cfg.sample_interval == 0:
-                    with ctx, torch.no_grad():
-                        n_samples = self.train_cfg.n_samples
-                        samples, audio, sample_mouse, sample_button = sampler(
-                            get_ema_core(),
-                            batch_vid[:n_samples],
-                            batch_audio[:n_samples],
-                            batch_mouse[:n_samples],
-                            batch_btn[:n_samples],
-                            decode_fn,
-                            audio_decode_fn,
-                            self.train_cfg.vae_scale,
-                            self.train_cfg.audio_vae_scale
-                        ) # -> [b,n,c,h,w]
-                        if self.rank == 0:
-                            video = to_wandb_av(samples, audio, sample_mouse, sample_button)
-                            wandb_dict['samples'] = video
-                    
-                if self.rank == 0:
-                    wandb.log(wandb_dict)
+            if self.total_step_counter % self.train_cfg.sample_interval == 0:
+                with ctx, torch.no_grad():
+                    n_samples = self.train_cfg.n_samples
+                    samples, audio, sample_mouse, sample_button = sampler(
+                        get_ema_core(),
+                        batch_vid[:n_samples],
+                        batch_audio[:n_samples],
+                        batch_mouse[:n_samples],
+                        batch_btn[:n_samples],
+                        decode_fn,
+                        audio_decode_fn,
+                        self.train_cfg.vae_scale,
+                        self.train_cfg.audio_vae_scale
+                    ) # -> [b,n,c,h,w]
+                    if self.rank == 0:
+                        video = to_wandb_av(samples, audio, sample_mouse, sample_button)
+                        wandb_dict['samples'] = video
+                
+            if self.rank == 0:
+                wandb.log(wandb_dict)
 
             self.total_step_counter += 1
             if self.total_step_counter % self.train_cfg.save_interval == 0:

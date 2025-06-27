@@ -17,9 +17,8 @@ class AVCachingSampler:
     :param only_return_generated: Whether to only return the generated frames
     :param cache_after_denoise: Whether to cache clean frame after denoising (vs caching final noisy frame)
     """
-    def __init__(self, n_steps=4, cfg_scale=1.3, num_frames=60, only_return_generated=False, cache_after_denoise=False):
+    def __init__(self, n_steps=4, num_frames=60, only_return_generated=False, cache_after_denoise=True):
         self.n_steps = n_steps
-        self.cfg_scale = cfg_scale
         self.num_frames = num_frames
         self.only_return_generated = only_return_generated
         self.cache_after_denoise = cache_after_denoise
@@ -54,42 +53,30 @@ class AVCachingSampler:
             curr_mouse = extended_mouse[:,frame_idx:frame_idx+1]
             curr_btn = extended_btn[:,frame_idx:frame_idx+1]
 
-            # Create masks for conditional and unconditional branches
             b = new_frame.shape[0]
-            uncond_mask = torch.zeros(b, dtype=torch.bool, device=new_frame.device)
-            cond_mask = torch.ones(b, dtype=torch.bool, device=new_frame.device)
+            ts = torch.ones_like(new_frame[:,0,0,0,0]).unsqueeze(1)
 
             # Denoise
             for step in range(self.n_steps):
-                ts = torch.ones_like(new_frame[:,0,0,0,0]).unsqueeze(1)
                 is_final_step = (step == self.n_steps - 1)
 
-                # Get unconditional predictions
-                pred_video_uncond, pred_audio_uncond = model(new_frame, new_audio, ts, curr_mouse, curr_btn, 
-                                                           has_controls=uncond_mask, kv_cache=kv_cache)
-                
-                # Get conditional predictions
                 if is_final_step and not self.cache_after_denoise:
                     kv_cache.enable_cache_updates()
-                pred_video_cond, pred_audio_cond = model(new_frame, new_audio, ts, curr_mouse, curr_btn,
-                                                       has_controls=cond_mask, kv_cache=kv_cache)
+                pred_video, pred_audio = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
                 if is_final_step and not self.cache_after_denoise:
                     kv_cache.disable_cache_updates()
-
-                # Apply CFG
-                pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
-                pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
 
                 # Update
                 new_frame = new_frame - pred_video * dt
                 new_audio = new_audio - pred_audio * dt
+                ts = ts - dt
 
             # Cache the frame
             if self.cache_after_denoise:
                 # Cache clean frame with noise level 1.0
                 kv_cache.enable_cache_updates()
                 ts = torch.ones_like(new_frame[:,0,0,0,0]).unsqueeze(1)
-                _ = model(new_frame, new_audio, ts, curr_mouse, curr_btn, has_controls=cond_mask, kv_cache=kv_cache)
+                _ = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
                 kv_cache.disable_cache_updates()
 
             # Add to history
