@@ -113,6 +113,7 @@ class FlatVideoRoPE(nn.Module):
     def forward(self, q, k):
         # q|k is [b,h,n_frames*tokens_per_frame,d]
         n = k.shape[2]//self.m  # Number of frames
+        n_q = q.shape[2]//self.m
         m = self.m             # Tokens per frame
 
         # Reshape to [b,h,n,m*d]
@@ -120,8 +121,12 @@ class FlatVideoRoPE(nn.Module):
         k = eo.rearrange(k, 'b h (n m) d -> b h n (m d)', m=m)
 
         # Apply rotary embeddings
-        q = self.pos_emb.rotate_queries_or_keys(q)
-        k = self.pos_emb.rotate_queries_or_keys(k)
+
+        if n_q == n:
+            q = self.pos_emb.rotate_queries_or_keys(q)
+            k = self.pos_emb.rotate_queries_or_keys(k)
+        else:
+            q,k = self.pos_emb.rotate_queries_with_cached_keys(q,k)
 
         # Reshape back
         q = eo.rearrange(q, 'b h n (m d) -> b h (n m) d', m=m)

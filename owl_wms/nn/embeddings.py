@@ -147,8 +147,8 @@ class MouseEmbedding(nn.Module):
             angle_emb = torch.stack([
                 torch.cos(angles),
                 torch.sin(angles)
-            ], dim=-1)  # [b,n,2]
-            magnitude_emb = self.magnitude_embed(magnitudes)  # [b,n,dim//2]
+            ], dim=-1).to(x.dtype)  # [b,n,2]
+            magnitude_emb = self.magnitude_embed(magnitudes).to(x.dtype)  # [b,n,dim//2]
 
         angle_emb = self.angle_proj(angle_emb)  # [b,n,dim//2]
         

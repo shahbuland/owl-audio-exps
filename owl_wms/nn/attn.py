@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from .normalization import LayerNorm, RMSNorm, QKNorm
 from .mlp import MLP
@@ -11,6 +12,10 @@ from .modulation import AdaLN, Gate
 from .rope import FlatVideoRoPE
 
 torch.backends.cuda.enable_flash_sdp(enabled = True)
+
+def checkpoint(function, *args, **kwargs):
+    kwargs.setdefault("use_reentrant", False)
+    return torch_checkpoint(function, *args, **kwargs)
 
 from einops._torch_specific import allow_ops_in_compiled_graph
 allow_ops_in_compiled_graph()
