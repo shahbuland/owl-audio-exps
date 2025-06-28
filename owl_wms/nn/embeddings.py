@@ -4,14 +4,12 @@ import torch.nn.functional as F
 
 import math
 
-import einops as eo
 from .mlp import MLPCustom
 
 from rotary_embedding_torch import (
     RotaryEmbedding,
     apply_rotary_emb
 )
-import einops as eo
 
 class LearnedPosEnc(nn.Module):
     def __init__(self, n_seq, dim):
@@ -24,9 +22,9 @@ class LearnedPosEnc(nn.Module):
         b,n,d = x.shape
         if n < self.n_seq:
             # Only add positional embeddings for the last n tokens
-            p = eo.repeat(self.p[-n:], 'n d -> b n d', b=b)
+            p = self.p[-n:].unsqueeze(0).repeat(b, 1, 1)
         else:
-            p = eo.repeat(self.p, 'n d -> b n d', b=b)
+            p = self.p.unsqueeze(0).repeat(b, 1, 1)
         return x + p
 
 class SinCosEmbed(nn.Module):

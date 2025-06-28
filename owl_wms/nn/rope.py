@@ -7,7 +7,6 @@ from rotary_embedding_torch import (
     RotaryEmbedding,
     apply_rotary_emb
 )
-import einops as eo
 import torch
 from torch import nn
 
@@ -27,8 +26,8 @@ class VideoRoPE(nn.Module):
         n_patches = config.sample_size // config.patch_size
         self.tokens_per_frame = n_patches**2
 
-        self.rearrange_in = lambda x: eo.rearrange(x, 'b h (n_t n_y n_x) d -> b h n_t n_y n_x d', n_y = n_patches)
-        self.rearrange_out = lambda x: eo.rearrange(x, 'b h n_t n_y n_x d -> b h (n_t n_y n_x) d')
+        self.rearrange_in = lambda x: x.view(x.shape[0], x.shape[1], -1, n_patches, n_patches, x.shape[3])
+        self.rearrange_out = lambda x: x.view(x.shape[0], x.shape[1], -1, x.shape[-1])
         self.get_freqs = lambda n_t: self.pos_emb.get_axial_freqs(n_t, n_patches, n_patches)
 
     def forward(self, q, k):
@@ -77,16 +76,16 @@ class _FlatVideoRoPE(nn.Module):
         if q.shape[2] < n * m:
             truncate = q.shape[2]//m # How many frames is q?
 
-        q = eo.rearrange(q, 'b h (n m) d -> b h n m d', n=q.shape[2]//m,m=m)
-        k = eo.rearrange(k, 'b h (n m) d -> b h n m d', n=n,m=m)
+        q = q.view(q.shape[0], q.shape[1], q.shape[2]//m, m, q.shape[3])
+        k = k.view(k.shape[0], k.shape[1], n, m, k.shape[3])
 
         with torch.no_grad():
             freqs = self.pos_emb.get_axial_freqs(n,m)
         q = apply_rotary_emb(freqs[-truncate:].detach(), q)
         k = apply_rotary_emb(freqs.detach(), k)
 
-        q = eo.rearrange(q, 'b h n m d -> b h (n m) d')
-        k = eo.rearrange(k, 'b h n m d -> b h (n m) d')
+        q = q.view(q.shape[0], q.shape[1], -1, q.shape[4])
+        k = k.view(k.shape[0], k.shape[1], -1, k.shape[4])
 
         if truncate is not None:
             q = q[:,:,-truncate*m:]
@@ -117,8 +116,8 @@ class FlatVideoRoPE(nn.Module):
         m = self.m             # Tokens per frame
 
         # Reshape to [b,h,n,m*d]
-        q = eo.rearrange(q, 'b h (n m) d -> b h n (m d)', m=m)
-        k = eo.rearrange(k, 'b h (n m) d -> b h n (m d)', m=m)
+        q = q.view(q.shape[0], q.shape[1], n_q, m * q.shape[3])
+        k = k.view(k.shape[0], k.shape[1], n, m * k.shape[3])
 
         # Apply rotary embeddings
 
@@ -129,7 +128,7 @@ class FlatVideoRoPE(nn.Module):
             q,k = self.pos_emb.rotate_queries_with_cached_keys(q,k)
 
         # Reshape back
-        q = eo.rearrange(q, 'b h n (m d) -> b h (n m) d', m=m)
-        k = eo.rearrange(k, 'b h n (m d) -> b h (n m) d', m=m)
+        q = q.view(q.shape[0], q.shape[1], -1, q.shape[3] // m)
+        k = k.view(k.shape[0], k.shape[1], -1, k.shape[3] // m)
 
         return q, k

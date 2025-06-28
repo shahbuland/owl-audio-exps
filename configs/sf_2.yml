@@ -62,7 +62,7 @@ train:
 
   sampler_id: av_caching
   sampler_kwargs:
-    n_steps: 4
+    n_steps: 3
     num_frames: 105
     only_return_generated: false
 

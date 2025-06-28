@@ -60,10 +60,10 @@ train:
 
   sampler_id: av_window
   sampler_kwargs:
-    n_steps: 16
+    n_steps: 10
     cfg_scale: 1.3
     window_length: 15
-    num_frames: 60
+    num_frames: 105
     noise_prev: 0.25
     only_return_generated: false
 
@@ -81,7 +81,7 @@ train:
   audio_vae_cfg_path: configs/owl_vaes/audio_ae_2.yml
   audio_vae_ckpt_path: checkpoints/owl_vaes/200m_codaudio_75k_ema.pt
 
-  teacher_ckpt: checkpoints/av_v2/step_20000.pt
+  teacher_ckpt: checkpoints/av_v2/step_90000.pt
 
 wandb:
   name: shahbuland

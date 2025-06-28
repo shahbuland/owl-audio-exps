@@ -50,14 +50,12 @@ class RolloutHandler:
         kv_cache.reset(self.batch_size)
 
         context_video = video[:,:self.context_frames]
-        target_video = video[:,self.context_frames:]
         context_audio = audio[:,:self.context_frames]
-        target_audio = audio[:,self.context_frames:]
         
         context_mouse = mouse[:,:self.context_frames]
-        target_mouse = mouse[:,self.context_frames:]
-        
         context_btn = btn[:,:self.context_frames] 
+
+        target_mouse = mouse[:,self.context_frames:]
         target_btn = btn[:,self.context_frames:]
 
         b,n,_,_,_ = context_video.shape

@@ -6,7 +6,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-import einops as eo
 
 from ..nn.embeddings import (
     TimestepEmbedding,
@@ -51,32 +50,32 @@ class GameRFTAudioCore(nn.Module):
         cond = ctrl_cond + t_cond # [b,n,d]
         
         b,n,c,h,w = x.shape
-        x = eo.rearrange(x, 'b n c h w -> b (n h w) c')
+        x = x.view(b, n * h * w, c)
 
         x = self.proj_in(x)
         audio = self.audio_proj_in(audio).unsqueeze(-2) # [b,n,1,d]
 
-        x = eo.rearrange(x, 'b (n f) d -> b n f d', n = n)
+        x = x.view(b, n, -1, x.shape[-1])
         x = torch.cat([x, audio], dim = -2)
-        x = eo.rearrange(x, 'b n f d -> b (n f) d')
+        x = x.view(b, n * x.shape[2], x.shape[-1])
 
         # Deal with pos-encs on frames
-        p = eo.repeat(self.pos_enc, 'f d -> b (n f) d', b = b, n = n)
+        p = self.pos_enc.unsqueeze(0).repeat(b, n, 1, 1).view(b, n * self.pos_enc.shape[0], self.pos_enc.shape[1])
         x = x + p
 
         x = self.transformer(x, cond, kv_cache)
 
         # Split into video and audio tokens
-        x = eo.rearrange(x, 'b (n f) d -> b n f d', n=n)
+        x = x.view(b, n, -1, x.shape[-1])
         video, audio = x[...,:-1,:], x[...,-1:,:]
 
         # Project video tokens
-        video = eo.rearrange(video, 'b n f d -> b (n f) d')
+        video = video.view(b, n * video.shape[2], video.shape[-1])
         video = self.proj_out(video, cond)
-        video = eo.rearrange(video, 'b (n h w) c -> b n c h w', n=n, h=h, w=w)
+        video = video.view(b, n, h, w, c).permute(0, 1, 4, 2, 3)
 
         # Project audio tokens
-        audio = eo.rearrange(audio, 'b n 1 d -> b n d')
+        audio = audio.squeeze(-2)
         audio = self.audio_proj_out(audio, cond)
 
         return video, audio
@@ -129,7 +128,7 @@ class GameRFTAudio(nn.Module):
             ts = torch.randn(b,n,device=x.device,dtype=x.dtype).sigmoid()
             
             # Video noise
-            ts_exp = eo.repeat(ts, 'b n -> b n 1 1 1')
+            ts_exp = ts[:, :, None, None, None]
             z_video = torch.randn_like(x)
             lerpd_video = x * (1. - ts_exp) + z_video * ts_exp
             target_video = z_video - x

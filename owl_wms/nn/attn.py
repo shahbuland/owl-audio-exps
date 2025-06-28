@@ -6,7 +6,6 @@ from torch.utils.checkpoint import checkpoint as torch_checkpoint
 from .normalization import LayerNorm, RMSNorm, QKNorm
 from .mlp import MLP
 
-import einops as eo
 
 from .modulation import AdaLN, Gate
 from .rope import FlatVideoRoPE
@@ -17,8 +16,6 @@ def checkpoint(function, *args, **kwargs):
     kwargs.setdefault("use_reentrant", False)
     return torch_checkpoint(function, *args, **kwargs)
 
-from einops._torch_specific import allow_ops_in_compiled_graph
-allow_ops_in_compiled_graph()
 
 def create_block_causal_mask(tokens, tokens_per_frame):
     frames = tokens // tokens_per_frame
@@ -26,11 +23,17 @@ def create_block_causal_mask(tokens, tokens_per_frame):
     # Create base causal mask, nothing is masked
     mask = torch.zeros(tokens, tokens)
     
-    # Allow attention within each frame
+    # Allow attention within each frame and to previous frames, except last frame can't see first frame
     for i in range(frames):
         start = i * tokens_per_frame
         end = (i + 1) * tokens_per_frame
-        mask[start:end, end:] = True # It can't see anything after its end
+        
+        # Mask future frames
+        mask[start:end, end:] = True
+        
+        # For last frame, also mask first frame
+        if i == frames - 1:
+            mask[start:end, :tokens_per_frame] = True
         
     return mask
 
@@ -52,7 +55,9 @@ class Attn(nn.Module):
         self.causal = config.causal
 
     def forward(self, x, kv_cache = None):
-        q,k,v = eo.rearrange(self.qkv(x), 'b n (three h d) -> three b h n d', three = 3, h = self.n_heads)
+        qkv = self.qkv(x)
+        qkv = qkv.view(qkv.shape[0], qkv.shape[1], 3, self.n_heads, -1)
+        q, k, v = qkv.permute(2, 0, 3, 1, 4)
         q,k = self.qk_norm(q,k)
 
         if not self.causal or (kv_cache is not None and len(kv_cache) > 0):
@@ -82,7 +87,7 @@ class Attn(nn.Module):
             q,k = self.rope(q,k)
             x = F.scaled_dot_product_attention(q,k,v, attn_mask = mask)
 
-        x = eo.rearrange(x, 'b h n d -> b n (h d)')
+        x = x.permute(0, 2, 1, 3).contiguous().view(x.shape[0], x.shape[2], -1)
         x = self.out(x)
         return x
 
