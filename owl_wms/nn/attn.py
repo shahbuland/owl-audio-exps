@@ -19,7 +19,6 @@ def checkpoint(function, *args, **kwargs):
 
 def create_block_causal_mask(tokens, tokens_per_frame):
     frames = tokens // tokens_per_frame
-    
     # Create base causal mask, nothing is masked
     mask = torch.zeros(tokens, tokens)
     

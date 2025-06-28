@@ -116,8 +116,8 @@ class FlatVideoRoPE(nn.Module):
         m = self.m             # Tokens per frame
 
         # Reshape to [b,h,n,m*d]
-        q = q.view(q.shape[0], q.shape[1], n_q, m * q.shape[3])
-        k = k.view(k.shape[0], k.shape[1], n, m * k.shape[3])
+        q = q.reshape(q.shape[0], q.shape[1], n_q, m * q.shape[3])
+        k = k.reshape(k.shape[0], k.shape[1], n, m * k.shape[3])
 
         # Apply rotary embeddings
 
@@ -128,7 +128,7 @@ class FlatVideoRoPE(nn.Module):
             q,k = self.pos_emb.rotate_queries_with_cached_keys(q,k)
 
         # Reshape back
-        q = q.view(q.shape[0], q.shape[1], -1, q.shape[3] // m)
-        k = k.view(k.shape[0], k.shape[1], -1, k.shape[3] // m)
+        q = q.reshape(q.shape[0], q.shape[1], -1, q.shape[3] // m)
+        k = k.reshape(k.shape[0], k.shape[1], -1, k.shape[3] // m)
 
         return q, k

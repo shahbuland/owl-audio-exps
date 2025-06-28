@@ -70,7 +70,7 @@ class GameRFTAudioCore(nn.Module):
         video, audio = x[...,:-1,:], x[...,-1:,:]
 
         # Project video tokens
-        video = video.view(b, n * video.shape[2], video.shape[-1])
+        video = video.reshape(b, n * video.shape[2], video.shape[-1])
         video = self.proj_out(video, cond)
         video = video.view(b, n, h, w, c).permute(0, 1, 4, 2, 3)
 
