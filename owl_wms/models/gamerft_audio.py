@@ -50,14 +50,15 @@ class GameRFTAudioCore(nn.Module):
         cond = ctrl_cond + t_cond # [b,n,d]
         
         b,n,c,h,w = x.shape
-        x = x.view(b, n * h * w, c)
+        x = x.permute(0,1,3,4,2) # bnhwc
+        x = x.reshape(b,n*h*w,c) # b(nhw)c
 
-        x = self.proj_in(x)
-        audio = self.audio_proj_in(audio).unsqueeze(-2) # [b,n,1,d]
+        x = self.proj_in(x) # b(nhw)d
+        audio = self.audio_proj_in(audio).unsqueeze(-2) # bn1d
 
-        x = x.view(b, n, -1, x.shape[-1])
-        x = torch.cat([x, audio], dim = -2)
-        x = x.view(b, n * x.shape[2], x.shape[-1])
+        x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
+        x = torch.cat([x, audio], dim = -2) # bn(hw+1)d
+        x = x.reshape(b, n * x.shape[2], x.shape[-1]) # b(n(hw+1))d
 
         # Deal with pos-encs on frames
         p = self.pos_enc.unsqueeze(0).repeat(b, n, 1, 1).view(b, n * self.pos_enc.shape[0], self.pos_enc.shape[1])
@@ -66,16 +67,16 @@ class GameRFTAudioCore(nn.Module):
         x = self.transformer(x, cond, kv_cache)
 
         # Split into video and audio tokens
-        x = x.view(b, n, -1, x.shape[-1])
-        video, audio = x[...,:-1,:], x[...,-1:,:]
+        x = x.view(b, n, -1, x.shape[-1]) # bn(hw+1)d
+        video, audio = x[...,:-1,:], x[...,-1:,:] # bn(hw)d | bn1d
 
         # Project video tokens
-        video = video.reshape(b, n * video.shape[2], video.shape[-1])
-        video = self.proj_out(video, cond)
-        video = video.view(b, n, h, w, c).permute(0, 1, 4, 2, 3)
+        video = video.reshape(b, n * video.shape[2], video.shape[-1]) # b(nhw)d
+        video = self.proj_out(video, cond) 
+        video = video.reshape(b, n, h, w, c).permute(0, 1, 4, 2, 3) # bnchw
 
         # Project audio tokens
-        audio = audio.squeeze(-2)
+        audio = audio.squeeze(-2) # bnd
         audio = self.audio_proj_out(audio, cond)
 
         return video, audio

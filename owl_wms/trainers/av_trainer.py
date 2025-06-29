@@ -98,7 +98,7 @@ class AVRFTTrainer(BaseTrainer):
         # Prepare model and ema
         self.model = self.model.cuda().train()
         if self.world_size > 1:
-            self.model = DDP(self.model, device_ids=[self.local_rank])
+            self.model = DDP(self.model, device_ids=[self.local_rank], find_unused_parameters=True)
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.audio_decoder = self.audio_decoder.cuda().eval().bfloat16()
 
@@ -155,15 +155,15 @@ class AVRFTTrainer(BaseTrainer):
 
         local_step = 0
         for _ in range(self.train_cfg.epochs):
-            for batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask in loader:
+            for batch_vid, batch_audio, batch_mouse, batch_btn in loader:
                 batch_vid = batch_vid.cuda().bfloat16() / self.train_cfg.vae_scale
                 batch_audio = batch_audio.cuda().bfloat16() / self.train_cfg.audio_vae_scale
                 batch_mouse = batch_mouse.cuda().bfloat16()
                 batch_btn = batch_btn.cuda().bfloat16()
-                cfg_mask = cfg_mask.cuda()
+                #cfg_mask = cfg_mask.cuda()
 
                 with ctx:
-                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn, has_controls=cfg_mask) / accum_steps
+                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
 
                 self.scaler.scale(loss).backward()
                 #find_unused_params(self.model)

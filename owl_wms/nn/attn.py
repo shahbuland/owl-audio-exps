@@ -16,7 +16,6 @@ def checkpoint(function, *args, **kwargs):
     kwargs.setdefault("use_reentrant", False)
     return torch_checkpoint(function, *args, **kwargs)
 
-
 def create_block_causal_mask(tokens, tokens_per_frame):
     frames = tokens // tokens_per_frame
     # Create base causal mask, nothing is masked
@@ -59,10 +58,14 @@ class Attn(nn.Module):
         q, k, v = qkv.permute(2, 0, 3, 1, 4)
         q,k = self.qk_norm(q,k)
 
-        if not self.causal or (kv_cache is not None and len(kv_cache) > 0):
+        if not self.causal:
             mask = None
         else:
-            mask = create_block_causal_mask(x.shape[1], self.tokens_per_frame).to(x.device)
+            if kv_cache is not None and len(kv_cache) > 0:
+                n_tok_mask = len(kv_cache)
+            else:
+                n_tok_mask = x.shape[1]
+            mask = create_block_causal_mask(n_tok_mask, self.tokens_per_frame).to(x.device)
             mask = mask.to(device=x.device).bool()
             mask = mask.unsqueeze(0).repeat(x.shape[0], 1, 1)
             mask = mask.unsqueeze(1)

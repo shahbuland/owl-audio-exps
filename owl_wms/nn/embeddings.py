@@ -49,7 +49,7 @@ class SinCosEmbed(nn.Module):
         reshape_out = False
         if x.dim() == 2:
             b, n = x.shape
-            x = x.reshape(b*n)
+            x = x.view(b*n)
             reshape_out = True
             
         x = x * self.mult
