@@ -31,7 +31,6 @@ class GameRFTAudioCore(nn.Module):
         self.audio_proj_out = FinalLayer(None, config.d_model, config.audio_channels)
 
         self.null_emb = nn.Parameter(torch.randn(config.d_model)*0.02)
-        self.pos_enc = nn.Parameter(torch.randn(config.tokens_per_frame, config.d_model)*0.02)
 
     def forward(self, x, audio, t, mouse, btn, has_controls = None, kv_cache = None):
         # x is [b,n,c,h,w]
@@ -59,10 +58,6 @@ class GameRFTAudioCore(nn.Module):
         x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
         x = torch.cat([x, audio], dim = -2) # bn(hw+1)d
         x = x.reshape(b, n * x.shape[2], x.shape[-1]) # b(n(hw+1))d
-
-        # Deal with pos-encs on frames
-        p = self.pos_enc.unsqueeze(0).repeat(b, n, 1, 1).view(b, n * self.pos_enc.shape[0], self.pos_enc.shape[1])
-        x = x + p
 
         x = self.transformer(x, cond, kv_cache)
 
