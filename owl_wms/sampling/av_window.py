@@ -6,6 +6,7 @@ from tqdm import tqdm
 
 from ..utils import batch_permute_to_length
 from ..nn.kv_cache import KVCache
+from .schedulers import get_sd3_euler
 
 def zlerp(x, alpha):
     z = torch.randn_like(x)
@@ -43,7 +44,7 @@ class AVWindowSampler:
         sampling_steps = self.n_steps
         num_frames = self.num_frames
 
-        dt = 1. / sampling_steps
+        dt = get_sd3_euler(self.n_steps)
 
         clean_history = dummy_batch.clone()
         clean_audio_history = audio.clone()
@@ -77,7 +78,7 @@ class AVWindowSampler:
             uncond_mask = torch.zeros(b, dtype=torch.bool, device=local_history.device)
             cond_mask = torch.ones(b, dtype=torch.bool, device=local_history.device)
 
-            for _ in range(sampling_steps):
+            for step_idx in range(sampling_steps):
                 x = local_history.clone()
                 a = local_audio.clone()
                 ts = ts_history.clone()
@@ -92,9 +93,9 @@ class AVWindowSampler:
                 pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
                 pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
                 
-                x = x - pred_video*dt
-                a = a - pred_audio*dt
-                ts = ts - dt
+                x = x - pred_video*dt[step_idx]
+                a = a - pred_audio*dt[step_idx]
+                ts = ts - dt[step_idx]
 
                 local_history[:,-1] = x[:,-1]
                 local_audio[:,-1] = a[:,-1]
@@ -159,7 +160,7 @@ class CausalAVWindowSampler:
         cache_cond = KVCache(model.config)
         cache_uncond = KVCache(model.config)
 
-        dt = 1. / sampling_steps
+        dt = get_sd3_euler(self.n_steps)
 
         clean_history = dummy_batch.clone()
         clean_audio_history = audio.clone()
@@ -195,38 +196,46 @@ class CausalAVWindowSampler:
 
             cache_cond.reset(dummy_batch.shape[0])
             cache_uncond.reset(dummy_batch.shape[0])
+
+            cache_cond.enable_cache_updates()
+            cache_uncond.enable_cache_updates()
+
             for step_idx in range(sampling_steps):
                 x = local_history.clone()
                 a = local_audio.clone()
                 ts = ts_history.clone()
 
                 if step_idx > 0:
-                    cache_cond.disable_cache_updates()
-                    cache_uncond.disable_cache_updates()
                     x = x[:,-1:]
                     a = a[:,-1:]
                     ts = ts[:,-1:]
-                else:
-                    cache_cond.enable_cache_updates()
-                    cache_cond.disable_cache_updates()
 
                 # Get unconditional predictions
                 pred_video_uncond, pred_audio_uncond = model(x, a, ts, mouse, btn, has_controls=uncond_mask, kv_cache=cache_uncond)
                 
                 # Get conditional predictions
                 pred_video_cond, pred_audio_cond = model(x, a, ts, mouse, btn, has_controls=cond_mask, kv_cache=cache_cond)
-
                 # Apply CFG
                 pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
                 pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
                 
-                x = x - pred_video*dt
-                a = a - pred_audio*dt
-                ts = ts - dt
+                x = x - pred_video*dt[step_idx]
+                a = a - pred_audio*dt[step_idx]
+                ts = ts - dt[step_idx]
 
                 local_history[:,-1] = x[:,-1]
                 local_audio[:,-1] = a[:,-1]
                 ts_history[:,-1] = ts[:,-1]
+
+                if step_idx == 0:
+                    mouse = mouse[:,-1:]
+                    btn = btn[:,-1:]
+                    
+                    # The final frame doesn't go in cache
+                    cache_cond.truncate(1)
+                    cache_uncond.truncate(1)
+                    cache_cond.disable_cache_updates()
+                    cache_uncond.disable_cache_updates()
             
             # Frame is entirely cleaned now
             new_frame = local_history[:,-1:]

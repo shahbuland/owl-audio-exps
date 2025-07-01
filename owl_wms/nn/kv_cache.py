@@ -5,7 +5,6 @@ from ..configs import TransformerConfig
 
 class KVCache:
     def __init__(self, config : TransformerConfig):
-        self.shape = None
         self.config = config
 
         self.cache = None
@@ -29,10 +28,10 @@ class KVCache:
         return self
 
     def reset(self, batch_size = 1):
-        self.shape = (batch_size, self.config.n_heads, 0, self.config.d_model//self.config.n_heads)
-        dummy = torch.empty(*self.shape, device = self.device, dtype = self.dtype)
+        shape = (batch_size, self.config.n_heads, 0, self.config.d_model//self.config.n_heads)
+        dummy = torch.empty(*shape, device = self.device, dtype = self.dtype)
         self.cache = [(torch.empty_like(dummy), torch.empty_like(dummy)) for _ in range(self.config.n_layers)]
-
+        
     @torch.no_grad()
     def get(self, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
@@ -75,9 +74,12 @@ class KVCache:
         for i in range(self.config.n_layers):
             self.cache[i] = tuple_truncate(*self.cache[i])
 
+    def length_at(self, idx):
+        return self.cache[idx][0].shape[2]
+        
     def __len__(self):
         assert self.cache is not None, "Must reset cache before using"
         return self.cache[0][0].shape[2]
 
     def shape(self):
-        return self.shape
+        return self.cache[0][0].shape

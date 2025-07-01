@@ -30,8 +30,6 @@ class GameRFTAudioCore(nn.Module):
         self.audio_proj_in = nn.Linear(config.audio_channels, config.d_model, bias=False)
         self.audio_proj_out = FinalLayer(None, config.d_model, config.audio_channels)
 
-        self.null_emb = nn.Parameter(torch.randn(config.d_model)*0.02)
-
     def forward(self, x, audio, t, mouse, btn, has_controls = None, kv_cache = None):
         # x is [b,n,c,h,w]
         # audio is [b,n,c]
@@ -39,11 +37,11 @@ class GameRFTAudioCore(nn.Module):
         # mouse is [b,n,2]
         # btn is [b,n,n_buttons]
 
-        ctrl_cond = self.control_embed(mouse, btn) # [b,n,d]
         if has_controls is not None:
-            null = self.null_emb[None,None,:].repeat(ctrl_cond.shape[0], ctrl_cond.shape[1], 1)
-            ctrl_cond = torch.where(has_controls[:,None,None], ctrl_cond, null)
+            mouse = torch.where(has_controls[:,None,None], mouse, torch.zeros_like(mouse))
+            btn = torch.where(has_controls[:,None,None], btn, torch.zeros_like(btn))
 
+        ctrl_cond = self.control_embed(mouse, btn) # [b,n,d]
         t_cond = self.t_embed(t)
 
         cond = ctrl_cond + t_cond # [b,n,d]
@@ -88,9 +86,6 @@ class GameRFTAudio(nn.Module):
             cfg_prob = self.cfg_prob
         if cfg_prob <= 0.0 or has_controls is None:
             return has_controls
-        # If has_controls not provided, assume all have controls
-        if has_controls is None:
-            has_controls = torch.ones(b, device=x.device, dtype=torch.bool)
             
         # Calculate current percentage without controls
         pct_without = 1.0 - has_controls.float().mean()

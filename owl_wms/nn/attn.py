@@ -61,8 +61,8 @@ class Attn(nn.Module):
         if not self.causal:
             mask = None
         else:
-            if kv_cache is not None and len(kv_cache) > 0:
-                n_tok_mask = len(kv_cache)
+            if kv_cache is not None and kv_cache.length_at(self.layer_ind) > 0:
+                n_tok_mask = kv_cache.length_at(self.layer_ind) + x.shape[1]
             else:
                 n_tok_mask = x.shape[1]
             mask = create_block_causal_mask(n_tok_mask, self.tokens_per_frame).to(x.device)
@@ -72,6 +72,7 @@ class Attn(nn.Module):
 
         if kv_cache is not None:
             old_k, old_v = kv_cache.get(self.layer_ind)
+            n_q = q.shape[-2]
 
             len_k = old_k.shape[2]
 
@@ -82,9 +83,10 @@ class Attn(nn.Module):
             if kv_cache.should_update:
                 kv_cache.update(new_k, new_v, self.layer_ind)
 
-            # Add rope here if we do use it
+            mask = mask[:,:,-n_q:,:] # Only new queries
+
             x = F.scaled_dot_product_attention(q, new_k, new_v, attn_mask = mask)
-            x = x[:,:,-q.shape[2]:] # Skip cached outputs (not relevant now)
+
         else:
             q,k = self.rope(q,k)
             x = F.scaled_dot_product_attention(q,k,v, attn_mask = mask)

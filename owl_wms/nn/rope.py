@@ -9,6 +9,7 @@ from rotary_embedding_torch import (
 )
 import torch
 from torch import nn
+import time
 
 class FlatVideoRoPE(nn.Module):
     """
@@ -30,7 +31,7 @@ class FlatVideoRoPE(nn.Module):
         self.m = config.tokens_per_frame
         self.p = config.sample_size
         self.p2 = self.p**2
-
+    
     def forward(self, q, k):
         b,h,_,d = k.shape
 
@@ -40,8 +41,8 @@ class FlatVideoRoPE(nn.Module):
         m = self.m             # Tokens per frame
 
         # Reshape to [b,h,n,m,d]
-        q = q.reshape(q.shape[0], q.shape[1], n_q, m, q.shape[3])
-        k = k.reshape(k.shape[0], k.shape[1], n, m, k.shape[3])
+        q = q.view(q.shape[0], q.shape[1], n_q, m, q.shape[3])
+        k = k.view(k.shape[0], k.shape[1], n, m, k.shape[3])
 
         # Split out the video and audio
         # bhnmd-> bhn(16)d, bhnd
@@ -64,9 +65,12 @@ class FlatVideoRoPE(nn.Module):
 
         with torch.no_grad():
             vid_freqs = self.pos_emb_video.get_axial_freqs(n, self.p, self.p)
-        
-        q_video = apply_rotary_emb(vid_freqs.detach(), q_video)
+
+        # Apply RoPE to video tokens
+        q_video = apply_rotary_emb(vid_freqs[-n_q:].detach(), q_video)
         k_video = apply_rotary_emb(vid_freqs.detach(), k_video)
+
+        # Apply RoPE to audio tokens
         q_audio, k_audio = self.pos_emb_audio.rotate_queries_with_cached_keys(q_audio, k_audio)
 
         q_video = q_video.reshape(
@@ -84,8 +88,58 @@ class FlatVideoRoPE(nn.Module):
             d
         )
         k = torch.cat([k_video, k_audio.unsqueeze(-2)], dim = -2)
-
+        
         q = q.view(b,h,n_q*m,d)
-        k = k.view(b,h,n_q*m,d)
+        k = k.view(b,h,n*m,d)
 
         return q, k
+
+
+
+def test_rope_speed():
+    """
+    Test the speed of RoPE implementation
+    """
+    from ..configs import TransformerConfig
+    import time
+    
+    # Create test configs matching AV model
+    config = TransformerConfig(
+        n_heads=24,
+        d_model=1536,
+        tokens_per_frame=17,
+        sample_size=4,
+        n_frames = 60
+    )
+
+    # Create model and inputs
+    rope = FlatVideoRoPE(config).cuda()
+    
+    batch_size = 32
+    seq_len = 60 * config.tokens_per_frame # 60 frames
+    d_head = config.d_model // config.n_heads
+    
+    q = torch.randn(batch_size, config.n_heads, seq_len, d_head).cuda()
+    k = torch.randn(batch_size, config.n_heads, seq_len, d_head).cuda()
+
+    # Warmup
+    for _ in range(3):
+        rope(q[:1], k[:1])
+    torch.cuda.synchronize()
+
+    # Benchmark
+    n_trials = 100
+    start = time.time()
+    for _ in range(n_trials):
+        rope(q, k)
+    torch.cuda.synchronize()
+    end = time.time()
+
+    avg_time = (end - start) / n_trials * 1000 # Convert to ms
+    print(f"Average RoPE time: {avg_time:.2f}ms")
+    print(f"Batch size: {batch_size}, Sequence length: {seq_len}")
+    print(f"Heads: {config.n_heads}, Head dim: {d_head}")
+
+if __name__ == "__main__":
+    test_rope_speed()
+
