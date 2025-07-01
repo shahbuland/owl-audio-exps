@@ -72,15 +72,11 @@ class AVRFTTrainer(BaseTrainer):
         super().save(save_dict)
     
     def load(self):
-        has_ckpt = False
-        try:
-            if self.train_cfg.resume_ckpt is not None:
-                save_dict = super().load(self.train_cfg.resume_ckpt)
-                has_ckpt = True
-        except:
-            print("Error loading checkpoint")
-        
-        if not has_ckpt:
+        if hasattr(self.train_cfg, 'resume_ckpt') and self.train_cfg.resume_ckpt is not None:
+            save_dict = super().load(self.train_cfg.resume_ckpt)
+            has_ckpt = True
+        else:
+            print("Failed to load checkpoint")
             return
 
         
@@ -98,7 +94,7 @@ class AVRFTTrainer(BaseTrainer):
         # Prepare model and ema
         self.model = self.model.cuda().train()
         if self.world_size > 1:
-            self.model = DDP(self.model, device_ids=[self.local_rank], find_unused_parameters=True)
+            self.model = DDP(self.model, device_ids=[self.local_rank])
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.audio_decoder = self.audio_decoder.cuda().eval().bfloat16()
 
