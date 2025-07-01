@@ -55,7 +55,7 @@ class BaseTrainer:
 
         torch.save(save_dict, fp)
 
-        if 'ema' in fp and getattr(self.train_cfg, 'output_path', None) is not None:
+        if 'ema' in save_dict and getattr(self.train_cfg, 'output_path', None) is not None:
             out_d = save_dict['ema']
             prefix = "ema_model.module." if self.world_size > 1 else "ema_model."
             out_d = {k[len(prefix):]: v for k, v in out_d.items() if k.startswith(prefix)}
