@@ -15,6 +15,7 @@ def prefix_filter(ckpt, prefix):
     return {k[len(prefix):]: v for k, v in ckpt.items() if k.startswith(prefix)}
 
 ckpt = prefix_filter(ckpt, "ema_model.module.core.")
+torch.save(ckpt, "core.pt")
 core = GameRFTAudioCore(cfg.model)
 core.load_state_dict(ckpt)
 

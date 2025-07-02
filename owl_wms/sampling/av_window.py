@@ -232,8 +232,8 @@ class CausalAVWindowSampler:
                     btn = btn[:,-1:]
                     
                     # The final frame doesn't go in cache
-                    cache_cond.truncate(1)
-                    cache_uncond.truncate(1)
+                    cache_cond.truncate(1, front = True)
+                    cache_uncond.truncate(1, front = True)
                     cache_cond.disable_cache_updates()
                     cache_uncond.disable_cache_updates()
             
