@@ -61,14 +61,18 @@ class KVCache:
         self.cache[layer_ind] = tuple_truncate(new_k,new_v)
     
     @torch.no_grad()
-    def truncate(self, truncate_amt):
+    def truncate(self, truncate_amt, front = False):
         """
         Truncate/eject frames from the KV cache
         """
         truncate_amt = truncate_amt * self.config.tokens_per_frame
         def tuple_truncate(k, v):
-            k = k[:,:,truncate_amt:]
-            v = v[:,:,truncate_amt:]
+            if front:
+                k = k[:,:,:-truncate_amt]
+                v = v[:,:,:-truncate_amt] 
+            else:
+                k = k[:,:,truncate_amt:]
+                v = v[:,:,truncate_amt:]
             return k, v
 
         for i in range(self.config.n_layers):
