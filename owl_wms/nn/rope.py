@@ -66,16 +66,22 @@ class FlatVideoRoPE(nn.Module):
             h,
             n_q, self.p, self.p,
             d
-        )
+        ) # b h n_q p p d
         k_video = k[:,:,:,:self.p2]
         k_video = k_video.view(
             b,
             h,
             n, self.p, self.p,
             d
-        )
+        ) # b h n_q p p d
         q_audio = q[:,:,:,-1]
         k_audio = k[:,:,:,-1] # bhnd
+
+        # Check for shape match between cache and k. If fail, reset cache
+        with torch.no_grad():
+            if self.vid_freqs_cache.shape[0] != n:
+                self.vid_freqs_cache = self.pos_emb_video.get_axial_freqs(n, self.p, self.p)
+                self.audio_freqs_cache = self.pos_emb_audio.get_axial_freqs(n)
 
         # Apply RoPE to video tokens
         q_video = apply_rotary_emb(self.vid_freqs_cache[-n_q:].detach(), q_video)
@@ -85,9 +91,6 @@ class FlatVideoRoPE(nn.Module):
         q_audio = apply_rotary_emb(self.audio_freqs_cache[-n_q:].detach(), q_audio)
         k_audio = apply_rotary_emb(self.audio_freqs_cache.detach(), k_audio)
 
-        #q_video, k_video = self.pos_emb_video.rotate_queries_with_cached_keys(q_video, k_video)
-        #q_audio, k_audio = self.pos_emb_audio.rotate_queries_with_cached_keys(q_audio, k_audio)
-        
         q_video = q_video.reshape(
             b,
             h,
@@ -108,7 +111,6 @@ class FlatVideoRoPE(nn.Module):
         k = k.view(b,h,n*m,d)
 
         return q, k
-
 
 def test_rope_speed():
     """

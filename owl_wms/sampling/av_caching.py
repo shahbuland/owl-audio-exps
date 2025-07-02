@@ -17,7 +17,7 @@ class AVCachingSampler:
     :param only_return_generated: Whether to only return the generated frames
     :param cache_after_denoise: Whether to cache clean frame after denoising (vs caching final noisy frame)
     """
-    def __init__(self, n_steps=3, num_frames=60, only_return_generated=False, cache_after_denoise=True):
+    def __init__(self, n_steps=4, num_frames=60, only_return_generated=False, cache_after_denoise=True):
         self.n_steps = n_steps
         self.num_frames = num_frames
         self.only_return_generated = only_return_generated
