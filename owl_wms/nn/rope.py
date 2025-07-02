@@ -11,7 +11,7 @@ import torch
 from torch import nn
 import time
 
-class FlatVideoRoPE(nn.Module):
+class _FlatVideoRoPE(nn.Module):
     """
     RoPE on video + audio assuming each frame flat'd to [n_frame_toks+n_audio_toks]
     """
@@ -94,7 +94,7 @@ class FlatVideoRoPE(nn.Module):
 
         return q, k
 
-class FlatVideoRoPE_v2(nn.Module):
+class FlatVideoRoPE(nn.Module):
     """
     RoPE on video + audio assuming each frame flat'd to [n_frame_toks+n_audio_toks]
     """
@@ -128,7 +128,7 @@ class FlatVideoRoPE_v2(nn.Module):
             persistent=False
         )
 
-    @torch.compile(mode='max-autotune', dynamic=False, fullgraph=True)
+    #@torch.compile(mode='max-autotune', dynamic=False, fullgraph=True)
     def forward(self, q, k):
         b,h,_,d = k.shape
 
@@ -168,6 +168,9 @@ class FlatVideoRoPE_v2(nn.Module):
         q_audio = apply_rotary_emb(self.audio_freqs_cache[-n_q:].detach(), q_audio)
         k_audio = apply_rotary_emb(self.audio_freqs_cache.detach(), k_audio)
 
+        #q_video, k_video = self.pos_emb_video.rotate_queries_with_cached_keys(q_video, k_video)
+        #q_audio, k_audio = self.pos_emb_audio.rotate_queries_with_cached_keys(q_audio, k_audio)
+        
         q_video = q_video.reshape(
             b,
             h,
