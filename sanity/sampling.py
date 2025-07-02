@@ -81,18 +81,59 @@ with torch.no_grad():
     uncond_mask = torch.zeros(b, dtype=torch.bool, device=batch_vid.device)
     cond_mask = torch.ones(b, dtype=torch.bool, device=batch_vid.device)
 
-    # Build up the cache
+    
+    # First get prediction without any caching
     cache_cond.enable_cache_updates()
-    cache_uncond.enable_cache_updates()
-
-    _ = core(batch_vid, batch_audio, ts, batch_mouse, batch_btn, has_controls=cond_mask, kv_cache=cache_cond)
-    _ = core(batch_vid, batch_audio, ts, batch_mouse, batch_btn, has_controls=uncond_mask, kv_cache=cache_uncond)
-
+    pred_video_no_cache, _ = core(
+        batch_vid, 
+        batch_audio, 
+        ts, 
+        batch_mouse, 
+        batch_btn, 
+        has_controls=cond_mask,
+        kv_cache=cache_cond
+    )
     cache_cond.disable_cache_updates()
-    cache_uncond.disable_cache_updates()
+    cache_cond.truncate(1, front = True)
+    """
 
-    cache_cond.truncate(1)
-    cache_uncond.truncate(1)
+    cache_uncond.enable_cache_updates()
+    pred_video_no_cache, _ = core(
+        batch_vid, 
+        batch_audio, 
+        ts, 
+        batch_mouse, 
+        batch_btn, 
+        has_controls=uncond_mask,
+        kv_cache=cache_uncond
+    #)
+    #cache_uncond.disable_cache_updates()
+    #cache_uncond.truncate(1, front = True)
+    """
+
+    #cache_cond.truncate(1, front = True)
+    # Save last frame prediction
+    last_frame_pred_no_cache = pred_video_no_cache[:,-1].clone()
+
+    # Get prediction for last frame using cache
+    pred_video_with_cache, _ = core(
+        batch_vid[:,-1:],
+        batch_audio[:,-1:], 
+        ts[:,-1:],
+        batch_mouse[:,-1:],
+        batch_btn[:,-1:],
+        has_controls=cond_mask,
+        kv_cache=cache_cond
+    )
+    last_frame_pred_with_cache = pred_video_with_cache[:,-1]
+
+    # Check if predictions match
+    diff = (last_frame_pred_no_cache - last_frame_pred_with_cache).abs().mean()
+    print(f"Difference between cached and non-cached predictions: {diff}")
+    exit()
+
+    #cache_cond.truncate(1)
+    #cache_uncond.truncate(1)
 
     for step_idx in range(n_steps):
         # Get unconditional predictions
