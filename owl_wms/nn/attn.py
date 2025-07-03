@@ -16,10 +16,10 @@ def checkpoint(function, *args, **kwargs):
     kwargs.setdefault("use_reentrant", False)
     return torch_checkpoint(function, *args, **kwargs)
 
-def create_block_causal_mask(tokens, tokens_per_frame):
+def create_block_causal_mask(tokens, tokens_per_frame, device, dtype):
     frames = tokens // tokens_per_frame
     # Create base causal mask, nothing is masked
-    mask = torch.zeros(tokens, tokens)
+    mask = torch.zeros(tokens, tokens, device = device, dtype = dtype)
     
     # Allow attention within each frame and to previous frames, except last frame can't see first frame
     for i in range(frames):
@@ -27,11 +27,11 @@ def create_block_causal_mask(tokens, tokens_per_frame):
         end = (i + 1) * tokens_per_frame
         
         # Mask future frames
-        mask[start:end, end:] = True
+        mask[start:end, end:] = float('-inf')
         
         # For last frame, also mask first frame
         if i == frames - 1:
-            mask[start:end, :tokens_per_frame] = True
+            mask[start:end, :tokens_per_frame] = float('-inf')
         
     return mask
 
@@ -65,8 +65,7 @@ class Attn(nn.Module):
                 n_tok_mask = kv_cache.length_at(self.layer_ind) + x.shape[1]
             else:
                 n_tok_mask = x.shape[1]
-            mask = create_block_causal_mask(n_tok_mask, self.tokens_per_frame).to(x.device)
-            mask = mask.to(device=x.device).bool()
+            mask = create_block_causal_mask(n_tok_mask, self.tokens_per_frame, device = x.device, dtype = x.dtype)
             mask = mask.unsqueeze(0).repeat(x.shape[0], 1, 1)
             mask = mask.unsqueeze(1)
 

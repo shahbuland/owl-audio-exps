@@ -77,7 +77,7 @@ class RolloutHandler:
             new_mouse = target_mouse[:,frame_idx:frame_idx+1]
             new_btn = target_btn[:,frame_idx:frame_idx+1]
 
-            if kv_cache.n_frames >= self.window_size:
+            if kv_cache.n_frames() >= self.window_size:
                 kv_cache.truncate(1, front=False)
 
             for _ in range(self.sampling_steps):
@@ -95,7 +95,6 @@ class RolloutHandler:
     
         return context_video, context_audio
 
-    @torch.no_grad()
     def sample_for_dmd(
         self,
         model,
@@ -120,15 +119,16 @@ class RolloutHandler:
         target_btn    = btn[:,   self.context_frames:]
 
         # Seed the cache with the conditioning context
-        ts = torch.zeros_like(context_video[:, :, 0, 0, 0])
-        kv_cache.enable_cache_updates()
-        _ = model(context_video,
-                  context_audio,
-                  ts,
-                  context_mouse,
-                  context_btn,
-                  kv_cache=kv_cache)
-        kv_cache.disable_cache_updates()
+        with torch.no_grad():
+            ts = torch.zeros_like(context_video[:, :, 0, 0, 0])
+            kv_cache.enable_cache_updates()
+            _ = model(context_video,
+                    context_audio,
+                    ts,
+                    context_mouse,
+                    context_btn,
+                    kv_cache=kv_cache)
+            kv_cache.disable_cache_updates()
 
         # ------------------------------------------------------------------ #
         # ❸  Autoregressive rollout                                          #
@@ -149,7 +149,7 @@ class RolloutHandler:
             new_btn    = target_btn[:,   frame_idx:frame_idx + 1]
 
             # Make sure the KV-cache never grows past the sliding window
-            if kv_cache.n_frames >= self.window_size:
+            if kv_cache.n_frames() >= self.window_size:
                 kv_cache.truncate(1, front=False)
 
             # -------------------------------------------------------------- #
@@ -158,37 +158,35 @@ class RolloutHandler:
             for step in range(self.sampling_steps):
                 if step == s:
                     # ONE step per frame keeps the computation graph
-                    with torch.enable_grad():
-                        vid_pred, aud_pred = model(new_frame,
-                                                   new_audio,
-                                                   ts,
-                                                   new_mouse,
-                                                   new_btn,
-                                                   kv_cache=kv_cache)
-                else:
-                    # All other steps stay in no-grad mode (cheap)
+                    kv_cache.enable_cache_updates()
                     vid_pred, aud_pred = model(new_frame,
-                                               new_audio,
-                                               ts,
-                                               new_mouse,
-                                               new_btn,
-                                               kv_cache=kv_cache)
+                                                new_audio,
+                                                ts,
+                                                new_mouse,
+                                                new_btn,
+                                                kv_cache=kv_cache)
+                    kv_cache.disable_cache_updates()
 
-                new_frame = new_frame - dt * vid_pred
-                new_audio = new_audio - dt * aud_pred
-                ts        = ts - dt
+                    new_frame = new_frame - dt * vid_pred
+                    new_audio = new_audio - dt * aud_pred
+                    ts = ts - dt
 
-            # -------------------------------------------------------------- #
-            # Push the *clean* final frame into the KV-cache (no grads)      #
-            # -------------------------------------------------------------- #
-            kv_cache.enable_cache_updates()
-            _ = model(new_frame,
-                      new_audio,
-                      ts,                     # ts is 0 here
-                      new_mouse,
-                      new_btn,
-                      kv_cache=kv_cache)
-            kv_cache.disable_cache_updates()
+                    break
+                else:
+                    with torch.no_grad():
+                        # All other steps stay in no-grad mode (cheap)
+                        vid_pred, aud_pred = model(new_frame,
+                                                new_audio,
+                                                ts,
+                                                new_mouse,
+                                                new_btn,
+                                                kv_cache=kv_cache)
+                    vid_pred = vid_pred.detach()
+                    aud_pred = aud_pred.detach()
+
+                    new_frame = new_frame - dt * vid_pred
+                    new_audio = new_audio - dt * aud_pred
+                    ts        = ts - dt
 
             # -------------------------------------------------------------- #
             # Extend the running context that the next frame will condition  #
@@ -328,7 +326,7 @@ class SelfForceTrainer(BaseTrainer):
             update_every = 1
         )
         # Hard coded stuff, probably #TODO figure out where to put this?
-        self.update_ratio = 5
+        self.update_ratio = self.train_cfg.update_ratio
         self.cfg_scale = 1.3
 
         def get_ema_core():
@@ -361,20 +359,28 @@ class SelfForceTrainer(BaseTrainer):
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
-        rollouts = RolloutHandler(self.model_cfg, self.train_cfg.batch_size, self.train_cfg.context_frames)
+        rollouts = RolloutHandler(self.model_cfg, self.train_cfg.batch_size, self.train_cfg.context_frames, self.train_cfg.rollout_steps)
 
         # Simplifiying assumptions: data will never stop iter, no grad accum
 
-        def sample_from_gen(vid, audio, mouse, btn, disable_inner_grad=True):
+        def sample_from_gen(vid, audio, mouse, btn, for_dmd=False):
             # Use rollout handler to generate samples
-            video_samples, audio_samples = rollouts(
-                self.model,
-                vid,
-                audio, 
-                mouse,
-                btn,
-                disable_inner_grad
-            )
+            if for_dmd:
+                video_samples, audio_samples = rollouts.sample_for_dmd(
+                    self.model,
+                    vid,
+                    audio, 
+                    mouse,
+                    btn
+                )
+            else:
+                video_samples, audio_samples = rollouts.sample_for_critic(
+                    self.model,
+                    vid,
+                    audio, 
+                    mouse,
+                    btn
+                )
             return video_samples, audio_samples
 
         # TODO account for n_context_frames in gradients
@@ -458,7 +464,7 @@ class SelfForceTrainer(BaseTrainer):
             scaler.update()
         
         def convert(inputs, device, dtype):
-            return [x.to(device=device, dtype=dtype if not x.dtype == torch.bool else x.dtype) for x in inputs]
+            return [x.to(device=device, dtype=dtype) for x in inputs]
 
         # Gradient accumulation setup
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
@@ -473,11 +479,13 @@ class SelfForceTrainer(BaseTrainer):
             # Score fake training loop with grad accum
             for _ in range(self.update_ratio):
                 for _ in range(accum_steps):
-                    batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask = convert(next(loader), 'cuda', torch.bfloat16)
+                    batch_vid, batch_audio, batch_mouse, batch_btn = convert(next(loader), 'cuda', torch.bfloat16)
+                    batch_vid = batch_vid / self.train_cfg.vae_scale
+                    batch_audio = batch_audio / self.train_cfg.audio_vae_scale
      
                     with ctx:
                         with torch.no_grad():
-                            video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn)
+                            video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, for_dmd=False)
                         
                         s_fake_loss = self.score_fake(video_samples, audio_samples, batch_mouse, batch_btn)
                         self.s_fake_scaler.scale(s_fake_loss / accum_steps).backward()
@@ -493,10 +501,12 @@ class SelfForceTrainer(BaseTrainer):
         
             # Generator training with grad accum
             for _ in range(accum_steps):
-                batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask = convert(next(loader), 'cuda', torch.bfloat16)
+                batch_vid, batch_audio, batch_mouse, batch_btn = convert(next(loader), 'cuda', torch.bfloat16)
+                batch_vid = batch_vid / self.train_cfg.vae_scale
+                batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
                 with ctx:
-                    video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, disable_inner_grad=False)
+                    video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, for_dmd=True)
                     dmd_loss = get_dmd_loss(video_samples, audio_samples, batch_mouse, batch_btn)
                     self.scaler.scale(dmd_loss / accum_steps).backward()
                 
