@@ -60,7 +60,7 @@ class RolloutHandler:
 
         b,n,_,_,_ = context_video.shape
         kv_cache.enable_cache_updates()
-        ts = torch.ones_like(context_video[:,:,0,0,0])
+        ts = torch.zeros_like(context_video[:,:,0,0,0])
         _ = model(context_video, context_audio, ts, context_mouse, context_btn, kv_cache=kv_cache)
         kv_cache.disable_cache_updates()
 
