@@ -33,8 +33,8 @@ train:
     prefix: labelled
     file_share_max: 50
 
-  target_batch_size: 64
-  batch_size: 8
+  target_batch_size: 4
+  batch_size: 4
 
   epochs: 200
 
@@ -61,7 +61,7 @@ train:
 
   sampler_id: av_caching
   sampler_kwargs:
-    n_steps: 4
+    n_steps: 3
     num_frames: 60
     window_length: 60
     only_return_generated: false
@@ -73,17 +73,17 @@ train:
   vae_scale: 0.7
   audio_vae_scale: 0.45
 
-  vae_cfg_path: configs/owl_vaes/cod_128x_depth.yml
-  vae_ckpt_path: checkpoints/owl_vaes/400m_cod128x_depth_140k_ema.pt
+  vae_cfg_path: configs/owl_vaes/cod_128x.yml
+  vae_ckpt_path: /mnt/data/checkpoints/cache_for_wm/sf_v0/cod_128x_rgb.pt
 
   audio_vae_id: null
   audio_vae_cfg_path: configs/owl_vaes/audio_ae_2.yml
-  audio_vae_ckpt_path: checkpoints/owl_vaes/200m_codaudio_75k_ema.pt
+  audio_vae_ckpt_path: /mnt/data/checkpoints/cache_for_wm/sf_v0/cod_audio.pt
 
-  teacher_ckpt: checkpoints/av_v2/step_90000.pt
-  student_ckpt: checkpoints/av_v2/step_90000.pt #checkpoints/av_v2_causal/step_30000.pt
+  teacher_ckpt: /mnt/data/checkpoints/cache_for_wm/sf_v0/causal_teacher.pt
+  student_ckpt: /mnt/data/checkpoints/cache_for_wm/sf_v0/causal_teacher.pt
 
-  context_frames: 4
+  context_frames: 40
 
 wandb:
   name: shahbuland

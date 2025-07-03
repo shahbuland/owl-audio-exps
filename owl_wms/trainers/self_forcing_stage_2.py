@@ -30,21 +30,22 @@ Model should be core since the wrapper is useless
 """
 
 class RolloutHandler:
-    def __init__(self, model_cfg, batch_size, context_frames):
+    def __init__(self, model_cfg, batch_size, context_frames, sampling_steps = 3):
         self.batch_size = batch_size
         self.model_cfg = model_cfg
 
         self.context_frames = context_frames
+        self.sampling_steps = sampling_steps
+        self.window_size = model_cfg.n_frames
 
     @torch.no_grad()
-    def __call__(
+    def sample_for_critic(
         self,
         model,
         video,
         audio,
         mouse,
-        btn,
-        disable_inner_grad = True
+        btn
     ):
         kv_cache = KVCache(self.model_cfg)
         kv_cache.reset(self.batch_size)
@@ -67,11 +68,8 @@ class RolloutHandler:
         # timesteps from 0.25,0.5,0.75,1.0
         rollout_frames = video.shape[1] - self.context_frames 
         for frame_idx in range(rollout_frames):
-            s = random.randint(0, 3)
-            s = (s + 1) / 4
-
             ts = torch.ones_like(context_video[:,0:1,0,0,0])
-            dt = 1. / 4
+            dt = 1. / self.sampling_steps
 
             new_frame = torch.randn_like(context_video[:,0:1])
             new_audio = torch.randn_like(context_audio[:,0:1])
@@ -79,30 +77,129 @@ class RolloutHandler:
             new_mouse = target_mouse[:,frame_idx:frame_idx+1]
             new_btn = target_btn[:,frame_idx:frame_idx+1]
 
-            def do_terminate():
-                return ts[0,0].item() <= s
-            
-            while not do_terminate():
+            if kv_cache.n_frames >= self.window_size:
+                kv_cache.truncate(1, front=False)
+
+            for _ in range(self.sampling_steps):
                 vid_pred, aud_pred = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
                 new_frame -= dt * vid_pred
                 new_audio -= dt * aud_pred
                 ts -= dt
 
-            def sample_terminal():
-                kv_cache.enable_cache_updates()
-                vid_pred, aud_pred = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
-                kv_cache.disable_cache_updates()
-                return (
-                    torch.cat([context_video, new_frame - dt*vid_pred], dim = 1),
-                    torch.cat([context_audio, new_audio - dt*aud_pred], dim = 1)
-                )
-            
-            if disable_inner_grad:
-                context_video, context_audio = sample_terminal()
-            else:
-                with torch.enable_grad():
-                    context_video, context_audio = sample_terminal()
+            kv_cache.enable_cache_updates()
+            _,_ = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
+            kv_cache.disable_cache_updates()
+
+            context_video = torch.cat([context_video, new_frame], dim = 1)
+            context_audio = torch.cat([context_audio, new_audio], dim = 1)
     
+        return context_video, context_audio
+
+    @torch.no_grad()
+    def sample_for_dmd(
+        self,
+        model,
+        video,
+        audio,
+        mouse,
+        btn
+    ):
+        # ------------------------------------------------------------------ #
+        # ❷  Set-up (identical to sample_for_critic)                         #
+        # ------------------------------------------------------------------ #
+        kv_cache = KVCache(self.model_cfg)
+        kv_cache.reset(self.batch_size)
+
+        context_video = video[:, :self.context_frames]
+        context_audio = audio[:, :self.context_frames]
+
+        context_mouse = mouse[:, :self.context_frames]
+        context_btn   = btn[:,   :self.context_frames]
+
+        target_mouse  = mouse[:, self.context_frames:]
+        target_btn    = btn[:,   self.context_frames:]
+
+        # Seed the cache with the conditioning context
+        ts = torch.zeros_like(context_video[:, :, 0, 0, 0])
+        kv_cache.enable_cache_updates()
+        _ = model(context_video,
+                  context_audio,
+                  ts,
+                  context_mouse,
+                  context_btn,
+                  kv_cache=kv_cache)
+        kv_cache.disable_cache_updates()
+
+        # ------------------------------------------------------------------ #
+        # ❸  Autoregressive rollout                                          #
+        # ------------------------------------------------------------------ #
+        rollout_frames = video.shape[1] - self.context_frames
+        dt             = 1.0 / self.sampling_steps
+
+        for frame_idx in range(rollout_frames):
+            # -------------------------------------------------------------- #
+            # Pick the “special” diffusion step s (0-based) that keeps grads #
+            # -------------------------------------------------------------- #
+            s = random.randint(0, self.sampling_steps - 1)
+
+            ts         = torch.ones_like(context_video[:, 0:1, 0, 0, 0])
+            new_frame  = torch.randn_like(context_video[:, 0:1])
+            new_audio  = torch.randn_like(context_audio[:, 0:1])
+            new_mouse  = target_mouse[:, frame_idx:frame_idx + 1]
+            new_btn    = target_btn[:,   frame_idx:frame_idx + 1]
+
+            # Make sure the KV-cache never grows past the sliding window
+            if kv_cache.n_frames >= self.window_size:
+                kv_cache.truncate(1, front=False)
+
+            # -------------------------------------------------------------- #
+            # Diffusion (self.sampling_steps steps)                          #
+            # -------------------------------------------------------------- #
+            for step in range(self.sampling_steps):
+                if step == s:
+                    # ONE step per frame keeps the computation graph
+                    with torch.enable_grad():
+                        vid_pred, aud_pred = model(new_frame,
+                                                   new_audio,
+                                                   ts,
+                                                   new_mouse,
+                                                   new_btn,
+                                                   kv_cache=kv_cache)
+                else:
+                    # All other steps stay in no-grad mode (cheap)
+                    vid_pred, aud_pred = model(new_frame,
+                                               new_audio,
+                                               ts,
+                                               new_mouse,
+                                               new_btn,
+                                               kv_cache=kv_cache)
+
+                new_frame = new_frame - dt * vid_pred
+                new_audio = new_audio - dt * aud_pred
+                ts        = ts - dt
+
+            # -------------------------------------------------------------- #
+            # Push the *clean* final frame into the KV-cache (no grads)      #
+            # -------------------------------------------------------------- #
+            kv_cache.enable_cache_updates()
+            _ = model(new_frame,
+                      new_audio,
+                      ts,                     # ts is 0 here
+                      new_mouse,
+                      new_btn,
+                      kv_cache=kv_cache)
+            kv_cache.disable_cache_updates()
+
+            # -------------------------------------------------------------- #
+            # Extend the running context that the next frame will condition  #
+            # on.                                                            #
+            # -------------------------------------------------------------- #
+            context_video = torch.cat([context_video, new_frame], dim=1)
+            context_audio = torch.cat([context_audio, new_audio], dim=1)
+
+        # ------------------------------------------------------------------ #
+        # ❹  Return the fully-generated rollout                              #
+        # ------------------------------------------------------------------ #
         return context_video, context_audio
             
 class SelfForceTrainer(BaseTrainer):
@@ -190,7 +287,6 @@ class SelfForceTrainer(BaseTrainer):
         if not has_ckpt:
             return
 
-        
         self.model.load_state_dict(save_dict['model'])
         self.ema.load_state_dict(save_dict['ema'])
         self.opt.load_state_dict(save_dict['opt'])
