@@ -17,11 +17,10 @@ class AVCachingSampler:
     :param only_return_generated: Whether to only return the generated frames
     :param cache_after_denoise: Whether to cache clean frame after denoising (vs caching final noisy frame)
     """
-    def __init__(self, n_steps=4, num_frames=60, only_return_generated=False, cache_after_denoise=True):
+    def __init__(self, n_steps=4, num_frames=60, only_return_generated=False):
         self.n_steps = n_steps
         self.num_frames = num_frames
         self.only_return_generated = only_return_generated
-        self.cache_after_denoise = cache_after_denoise
 
     @torch.no_grad()
     def __call__(self, model, dummy_batch, audio, mouse, btn, decode_fn=None, audio_decode_fn=None, image_scale=1, audio_scale=1):
@@ -38,7 +37,7 @@ class AVCachingSampler:
 
         # Cache context frames
         kv_cache.enable_cache_updates()
-        ts = torch.ones_like(clean_history[:,:,0,0,0])
+        ts = torch.zeros_like(clean_history[:,:,0,0,0])
         _ = model(clean_history, clean_audio_history, ts, mouse, btn, kv_cache=kv_cache)
         kv_cache.disable_cache_updates()
 
@@ -56,28 +55,23 @@ class AVCachingSampler:
             b = new_frame.shape[0]
             ts = torch.ones_like(new_frame[:,0,0,0,0]).unsqueeze(1)
 
+            if kv_cache.n_frames() >= self.window_length:
+                kv_cache.truncate(1, front=False)
+
             # Denoise
             for step in range(self.n_steps):
-                is_final_step = (step == self.n_steps - 1)
-
-                if is_final_step and not self.cache_after_denoise:
-                    kv_cache.enable_cache_updates()
                 pred_video, pred_audio = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
-                if is_final_step and not self.cache_after_denoise:
-                    kv_cache.disable_cache_updates()
 
                 # Update
                 new_frame = new_frame - pred_video * dt
                 new_audio = new_audio - pred_audio * dt
                 ts = ts - dt
 
-            # Cache the frame
-            if self.cache_after_denoise:
-                # Cache clean frame with noise level 1.0
-                kv_cache.enable_cache_updates()
-                ts = torch.ones_like(new_frame[:,0,0,0,0]).unsqueeze(1)
-                _ = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
-                kv_cache.disable_cache_updates()
+            # Cache clean frame with noise level 1.0
+            kv_cache.enable_cache_updates()
+            ts = torch.zeros_like(new_frame[:,0,0,0,0]).unsqueeze(1)
+            _ = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
+            kv_cache.disable_cache_updates()
 
             # Add to history
             clean_history = torch.cat([clean_history, new_frame], dim=1)

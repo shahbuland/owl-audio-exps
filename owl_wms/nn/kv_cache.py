@@ -85,5 +85,8 @@ class KVCache:
         assert self.cache is not None, "Must reset cache before using"
         return self.cache[0][0].shape[2]
 
+    def n_frames(self):
+        return len(self) // self.config.tokens_per_frame
+
     def shape(self):
         return self.cache[0][0].shape

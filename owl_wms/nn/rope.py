@@ -79,17 +79,16 @@ class FlatVideoRoPE(nn.Module):
 
         # Check for shape match between cache and k. If fail, reset cache
         with torch.no_grad():
-            if self.vid_freqs_cache.shape[0] != n:
-                self.vid_freqs_cache = self.pos_emb_video.get_axial_freqs(n, self.p, self.p)
-                self.audio_freqs_cache = self.pos_emb_audio.get_axial_freqs(n)
+            vid_freqs = self.vid_freqs_cache[-n:]
+            audio_freqs = self.audio_freqs_cache[-n:]
 
         # Apply RoPE to video tokens
-        q_video = apply_rotary_emb(self.vid_freqs_cache[-n_q:].detach(), q_video)
-        k_video = apply_rotary_emb(self.vid_freqs_cache.detach(), k_video)
+        q_video = apply_rotary_emb(vid_freqs[-n_q:].detach(), q_video)
+        k_video = apply_rotary_emb(vid_freqs.detach(), k_video)
 
         # Apply RoPE to audio tokens
-        q_audio = apply_rotary_emb(self.audio_freqs_cache[-n_q:].detach(), q_audio)
-        k_audio = apply_rotary_emb(self.audio_freqs_cache.detach(), k_audio)
+        q_audio = apply_rotary_emb(audio_freqs[-n_q:].detach(), q_audio)
+        k_audio = apply_rotary_emb(audio_freqs.detach(), k_audio)
 
         q_video = q_video.reshape(
             b,
