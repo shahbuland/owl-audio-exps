@@ -124,6 +124,12 @@ class S3CoDLatentAudioDataset(IterableDataset):
                             latent = self.process_tensor_file(tar, base_name, "latent")
                             mouse = self.process_tensor_file(tar, base_name, "mouse")
                             button = self.process_tensor_file(tar, base_name, "buttons")
+                            
+                            # If mouse/button don't exist, create zeros with correct shapes
+                            if mouse is None or button is None:
+                                n,_,_,_ = latent.shape
+                                mouse = torch.zeros(n, 2)
+                                button = torch.zeros(n, 11)
                             audio = self.process_tensor_file(tar, base_name, "audiolatent")
 
                             if all(t is not None for t in [latent, mouse, button, audio]):
@@ -184,7 +190,11 @@ def get_loader(batch_size, **data_kwargs):
 
 if __name__ == "__main__":
     import time
-    loader = get_loader(16, window_length = 120, file_share_max = 20, include_audio = True)
+    loader = get_loader(16, 
+                       window_length=16,
+                       bucket_name="cod-data-latent-360x640to4x4",
+                       prefix="feats/unlabelled",
+                       file_share_max=50)
 
     start = time.time()
     batch = next(iter(loader))
@@ -196,10 +206,11 @@ if __name__ == "__main__":
     end = time.time()
     second_time = end - start
     
-    x,y,z = batch
+    x,w,y,z = batch
     print(f"Time to load first batch: {first_time:.2f}s")
     print(f"Time to load second batch: {second_time:.2f}s")
     print(f"Video shape: {x.shape}")
+    print(f"Audio shape: {w.shape}")
     print(x.std())
     print(f"Mouse shape: {y.shape}") 
     print(f"Button shape: {z.shape}")

@@ -57,6 +57,9 @@ class AVRFTTrainer(BaseTrainer):
             self.train_cfg.audio_vae_ckpt_path
         )
 
+        if self.train_cfg.uncond:
+            self.model.uncond = True
+
         freeze(self.decoder)
 
     def save(self):

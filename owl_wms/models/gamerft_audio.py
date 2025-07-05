@@ -20,8 +20,15 @@ class GameRFTAudioCore(nn.Module):
 
         self.config = config
 
-        self.transformer = DiT(config)
-        self.control_embed = ControlEmbedding(config.n_buttons, config.d_model)
+        if config.backbone == 'dit':
+            backbone_cls = DiT
+        elif config.backbone == 'mmdit':
+            backbone_cls = MMDIT
+        self.backbone = config.backbone
+
+        self.transformer = backbone_cls(config)
+
+        if not config.uncond: self.control_embed = ControlEmbedding(config.n_buttons, config.d_model)
         self.t_embed = TimestepEmbedding(config.d_model)
 
         self.proj_in = nn.Linear(config.channels, config.d_model, bias = False)
@@ -30,6 +37,8 @@ class GameRFTAudioCore(nn.Module):
         self.audio_proj_in = nn.Linear(config.audio_channels, config.d_model, bias=False)
         self.audio_proj_out = FinalLayer(None, config.d_model, config.audio_channels)
 
+        self.uncond = config.uncond
+
     def forward(self, x, audio, t, mouse, btn, has_controls = None, kv_cache = None):
         # x is [b,n,c,h,w]
         # audio is [b,n,c]
@@ -37,27 +46,33 @@ class GameRFTAudioCore(nn.Module):
         # mouse is [b,n,2]
         # btn is [b,n,n_buttons]
 
-        if has_controls is not None:
+        if has_controls is not None and not self.uncond:
             mouse = torch.where(has_controls[:,None,None], mouse, torch.zeros_like(mouse))
             btn = torch.where(has_controls[:,None,None], btn, torch.zeros_like(btn))
 
-        ctrl_cond = self.control_embed(mouse, btn) # [b,n,d]
         t_cond = self.t_embed(t)
 
-        cond = ctrl_cond + t_cond # [b,n,d]
+        if not self.uncond:
+            ctrl_cond = self.control_embed(mouse, btn) # [b,n,d]
+            cond = t_cond + ctrl_cond # [b,n,d]
+        else:
+            cond = t_cond
         
         b,n,c,h,w = x.shape
         x = x.permute(0,1,3,4,2) # bnhwc
         x = x.reshape(b,n*h*w,c) # b(nhw)c
 
         x = self.proj_in(x) # b(nhw)d
-        audio = self.audio_proj_in(audio).unsqueeze(-2) # bn1d
+        audio = self.audio_proj_in(audio) # bnd
 
-        x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
-        x = torch.cat([x, audio], dim = -2) # bn(hw+1)d
-        x = x.reshape(b, n * x.shape[2], x.shape[-1]) # b(n(hw+1))d
-
-        x = self.transformer(x, cond, kv_cache)
+        if self.backbone == 'dit':
+            audio = audio.unsqueeze(-2) # bn1d
+            x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
+            x = torch.cat([x, audio], dim = -2) # bn(hw+1)d
+            x = x.reshape(b, n * x.shape[2], x.shape[-1]) # b(n(hw+1))d
+            x = self.transformer(x, cond, kv_cache)
+        elif self.backbone == 'mmdit':
+            x = self.transformer(x, audio, cond, kv_cache)
 
         # Split into video and audio tokens
         x = x.view(b, n, -1, x.shape[-1]) # bn(hw+1)d

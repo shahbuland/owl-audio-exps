@@ -112,11 +112,11 @@ def _to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples =
     return video, audio_samples
 
 @torch.no_grad()
-def to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples = 8):
+def to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples = 4):
     # x is [b,n,c,h,w]
     # audio is [b,n,2]
     x = x.clamp(-1, 1)
-    x = x[:max_samples]
+    x = x[:max_samples,:,:3]
     audio = audio[:max_samples].cpu().float().detach().numpy()
 
     if dist.is_initialized() and gather:
