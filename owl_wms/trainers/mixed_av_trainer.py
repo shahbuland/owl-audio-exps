@@ -17,7 +17,7 @@ from ..utils.logging import LogHelper, to_wandb_av
 from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 
-class AVRFTTrainer(BaseTrainer):
+class MixedAVRFTTrainer(BaseTrainer):
     """
     Trainer for rectified flow transformer
 
@@ -151,15 +151,15 @@ class AVRFTTrainer(BaseTrainer):
 
         local_step = 0
         for _ in range(self.train_cfg.epochs):
-            for batch_vid, batch_audio, batch_mouse, batch_btn in loader:
+            for batch_vid, batch_audio, batch_mouse, batch_btn, cfg_mask in loader:
                 batch_vid = batch_vid.cuda().bfloat16() / self.train_cfg.vae_scale
                 batch_audio = batch_audio.cuda().bfloat16() / self.train_cfg.audio_vae_scale
                 batch_mouse = batch_mouse.cuda().bfloat16()
                 batch_btn = batch_btn.cuda().bfloat16()
-                #cfg_mask = cfg_mask.cuda()
+                cfg_mask = cfg_mask.cuda()
 
                 with ctx:
-                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
+                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn, has_controls=cfg_mask) / accum_steps
 
                 self.scaler.scale(loss).backward()
                 #find_unused_params(self.model)
@@ -186,6 +186,7 @@ class AVRFTTrainer(BaseTrainer):
                     with torch.no_grad():
                         wandb_dict = metrics.pop()
                         wandb_dict['time'] = timer.hit()
+                        wandb_dict['unlabelled_proportion'] = (~cfg_mask).float().mean().item()
                         timer.reset()
 
                         # Sampling commented out for now

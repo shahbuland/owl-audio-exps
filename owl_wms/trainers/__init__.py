@@ -8,6 +8,9 @@ def get_trainer_cls(trainer_id):
     if trainer_id == "av":
         from .av_trainer import AVRFTTrainer
         return AVRFTTrainer
+    if trainer_id == "mixed_av":
+        from .mixed_av_trainer import MixedAVRFTTrainer
+        return MixedAVRFTTrainer
     if trainer_id == "sforce1":
         from .self_forcing_stage_1 import CausalDistillationTrainer
         return CausalDistillationTrainer

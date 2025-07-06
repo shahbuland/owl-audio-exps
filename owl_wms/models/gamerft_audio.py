@@ -46,14 +46,12 @@ class GameRFTAudioCore(nn.Module):
         # mouse is [b,n,2]
         # btn is [b,n,n_buttons]
 
-        if has_controls is not None and not self.uncond:
-            mouse = torch.where(has_controls[:,None,None], mouse, torch.zeros_like(mouse))
-            btn = torch.where(has_controls[:,None,None], btn, torch.zeros_like(btn))
-
         t_cond = self.t_embed(t)
 
         if not self.uncond:
             ctrl_cond = self.control_embed(mouse, btn) # [b,n,d]
+            if has_controls is not None:
+                ctrl_cond = torch.where(has_controls[:,None,None], ctrl_cond, torch.zeros_like(ctrl_cond))
             cond = t_cond + ctrl_cond # [b,n,d]
         else:
             cond = t_cond

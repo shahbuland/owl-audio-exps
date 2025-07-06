@@ -179,6 +179,8 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
                         for base_name in base_names:
                             latent = self.process_tensor_file(tar, base_name, "latent")
+                            latent = torch.clamp(latent, -8, 8)
+                            latent = torch.nan_to_num(latent, nan=0.0)
                             audio = self.process_tensor_file(tar, base_name, "audiolatent")
                             
                             if is_conditional:
@@ -265,8 +267,12 @@ def get_loader(batch_size, **data_kwargs):
     return DataLoader(ds, batch_size=batch_size, collate_fn=collate_fn)
 
 if __name__ == "__main__":
+    from ..configs import Config
+
+    cfg = Config.from_yaml("configs/av_v5_8x8_mixed.yml")
+    loader = get_loader(cfg.train.target_batch_size, **cfg.train.data_kwargs)
     import time
-    loader = get_loader(16, window_length=120, file_share_max=20, unlabelled_frac=0.5)
+
     loader.dataset.sleep_until_queues_filled()
 
     start = time.time()
@@ -287,3 +293,5 @@ if __name__ == "__main__":
     print(f"Mouse shape: {m.shape}")
     print(f"Button shape: {b.shape}")
     print(f"Has controls: {h}")
+
+    print(f"Proportion of conditional samples: {h.float().mean().item():.3f}")
