@@ -121,7 +121,10 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
                         for base_name in base_names:
                             # Load all tensors for this base name
-                            latent = self.process_tensor_file(tar, base_name, "latent")
+                            latent = self.process_tensor_file(tar, base_name, "latent").bfloat16()
+                            latent = torch.clamp(latent, -8, 8)
+                            latent = torch.nan_to_num(latent, nan=0.0)
+                            
                             mouse = self.process_tensor_file(tar, base_name, "mouse")
                             button = self.process_tensor_file(tar, base_name, "buttons")
                             

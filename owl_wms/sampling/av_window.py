@@ -213,11 +213,16 @@ class CausalAVWindowSampler:
                 # Get unconditional predictions
                 pred_video_uncond, pred_audio_uncond = model(x, a, ts, mouse, btn, has_controls=uncond_mask, kv_cache=cache_uncond)
                 
-                # Get conditional predictions
-                pred_video_cond, pred_audio_cond = model(x, a, ts, mouse, btn, has_controls=cond_mask, kv_cache=cache_cond)
-                # Apply CFG
-                pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
-                pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
+                if self.cfg_scale > 0:
+                    # Get conditional predictions
+                    pred_video_cond, pred_audio_cond = model(x, a, ts, mouse, btn, has_controls=cond_mask, kv_cache=cache_cond)
+                    # Apply CFG
+                    pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
+                    pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
+                else:
+                    # Skip conditional branch when cfg_scale is 0
+                    pred_video = pred_video_uncond
+                    pred_audio = pred_audio_uncond
                 
                 x = x - pred_video*dt[step_idx]
                 a = a - pred_audio*dt[step_idx]
