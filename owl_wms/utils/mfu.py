@@ -73,11 +73,14 @@ class MFUProfiler:
     
     def _get_device_peak_tflops(self, bf16: bool = True) -> float:
         """Rough theoretical peak TFLOPs"""
-        fp_ops_per_sm = 256 if bf16 else 128
-        prop = torch.cuda.get_device_properties(0)
-        clock_rate = torch.cuda.clock_rate()
-        peak = 2 * prop.multi_processor_count * fp_ops_per_sm * clock_rate * 1e3
-        return peak / 1e12
+        #fp_ops_per_sm = 256 if bf16 else 128
+        #prop = torch.cuda.get_device_properties(0)
+        #clock_rate = torch.cuda.clock_rate()
+        #clock_rate = 1785
+        #peak = 2 * prop.multi_processor_count * fp_ops_per_sm * clock_rate * 1e3
+
+        return 1979
+        #return peak / 1e12
 
 
 if __name__ == "__main__":
@@ -92,7 +95,7 @@ if __name__ == "__main__":
 
     # Create dummy batch with expected input shapes
     n = cfg.model.n_frames
-    b = cfg.train.batch_size
+    b = 1
     c = cfg.model.channels
     h = w = cfg.model.sample_size
     audio_c = cfg.model.audio_channels
@@ -106,9 +109,26 @@ if __name__ == "__main__":
         torch.randn(b, n, n_mouse_axes, device='cuda', dtype=torch.bfloat16),  # mouse
         torch.randn(b, n, n_buttons, device='cuda', dtype=torch.bfloat16),  # buttons
     )
-
+    model = torch.compile(model, mode='max-autotune', dynamic=False, fullgraph=True)
     profiler = MFUProfiler(model, profiler_sample, world_size=1, rank=0, precision="bf16", enabled=True)
-    profiler.start_step()
-    profiler.end_step(cfg.train.batch_size)
+
+    opt = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    res = []
+    for _ in range(10):
+        with torch.no_grad():
+            profiler.start_step()
+            loss = model(*profiler_sample)
+            #opt.zero_grad()
+        # loss.backward()
+            #opt.step()
+            res.append(profiler.end_step(cfg.train.batch_size))
+        
+    # Res is a dict of metrics, so we want to get min,max,mean for each key
+    for key in res[0].keys():
+        print(f"{key} (min): {min([r[key] for r in res])}")
+        print(f"{key} (max): {max([r[key] for r in res])}")
+        print(f"{key} (mean): {sum([r[key] for r in res]) / len(res)}")
+
 
     
