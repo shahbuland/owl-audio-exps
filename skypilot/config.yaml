@@ -1,0 +1,27 @@
+name: owl-wms-multinode
+
+resources:
+  image_id: docker:us-central1-docker.pkg.dev/openworld-main/skypilot/owl-wm-cond:latest
+  accelerators: H200:8
+
+num_nodes: 2
+
+setup: |
+  # Commands to run inside the container
+  echo "Setting up multi-node training environment..."
+  
+run: |
+  export LOGLEVEL=INFO
+  
+  # Get the head node IP
+  MASTER_ADDR=$(echo "$SKYPILOT_NODE_IPS" | head -n1)
+  echo "Starting distributed training, head node: $MASTER_ADDR"
+  
+  # Run distributed training with torchrun
+  torchrun \
+    --nnodes=$SKYPILOT_NUM_NODES \
+    --nproc_per_node=$SKYPILOT_NUM_GPUS_PER_NODE \
+    --master_addr=$MASTER_ADDR \
+    --node_rank=${SKYPILOT_NODE_RANK} \
+    --master_port=8008 \
+    train.py --config_path configs/av_v2_4x4.yml

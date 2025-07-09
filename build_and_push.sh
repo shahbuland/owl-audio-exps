@@ -37,6 +37,10 @@ docker tag $LOCAL_TAG $REMOTE_TAG
 echo "Pushing image to remote repository..."
 docker push $REMOTE_TAG
 
+echo "Updating SkyPilot config with new image tag..."
+sed -i "s|image_id: docker:.*|image_id: docker:$REMOTE_TAG|" skypilot/config.yaml
+
 echo "Build and push completed successfully!"
 echo "Local tag: $LOCAL_TAG"
 echo "Remote tag: $REMOTE_TAG"
+echo "SkyPilot config updated to use: $REMOTE_TAG"
