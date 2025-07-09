@@ -56,11 +56,13 @@ The script will:
    ```
 
 ### Prerequisites
-Make sure you're authenticated with Google Cloud:
-```bash
-gcloud auth login
-gcloud auth application-default login
-```
+1. Make sure you're authenticated with Google Cloud:
+   ```bash
+   gcloud auth login
+   gcloud auth application-default login
+   ```
+
+2. Make sure you set environment variables, including WANDB_API_KEY. Note! The model will NOT train without this.
 
 ### Launch Training
 ```bash
