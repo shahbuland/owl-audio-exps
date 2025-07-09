@@ -37,14 +37,23 @@ docker tag $LOCAL_TAG $REMOTE_TAG
 echo "Pushing image to remote repository..."
 docker push $REMOTE_TAG
 
-echo "Updating SkyPilot config with new image tag..."
-sed -i "s|image_id: docker:.*|image_id: docker:$REMOTE_TAG|" skypilot/config.yaml
+echo "Getting image digest..."
+DIGEST=$(docker inspect $REMOTE_TAG --format='{{index .RepoDigests 0}}' | cut -d'@' -f2)
+if [ -z "$DIGEST" ]; then
+    echo "Failed to get digest, falling back to tag"
+    IMAGE_REF="$REMOTE_TAG"
+else
+    IMAGE_REF="${REMOTE_TAG%:*}@${DIGEST}"
+fi
+
+echo "Updating SkyPilot config with new image digest..."
+sed -i "s|image_id: docker:.*|image_id: docker:$IMAGE_REF|" skypilot/config.yaml
 
 echo "Build and push completed successfully!"
 echo "Local tag: $LOCAL_TAG"
 echo "Remote tag: $REMOTE_TAG"
-echo "SkyPilot config updated to use: $REMOTE_TAG"
+echo "Image digest: $DIGEST"
+echo "SkyPilot config updated to use: $IMAGE_REF"
 echo ""
-echo "To use this image, set the GCP service account key:"
-echo "export SKYPILOT_DOCKER_PASSWORD=\$(cat /path/to/your/gcp-key.json)"
-echo "Or launch with: sky launch skypilot/config.yaml --env SKYPILOT_DOCKER_PASSWORD=\"\$(cat /path/to/your/gcp-key.json)\""
+echo "To use this image:"
+echo "Launch with sky launch skypilot/config.yaml""
