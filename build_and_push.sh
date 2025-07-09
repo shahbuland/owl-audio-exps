@@ -4,15 +4,28 @@
 
 set -e  # Exit on any error
 
-# Configuration
-PROJECT_ID="openworld-main"
-REGISTRY="us-central1-docker.pkg.dev"
-REPOSITORY="skypilot"
-IMAGE_NAME="owl-wm-cond"
-TAG=${1:-latest}
+# Load environment variables
+if [ -f .env ]; then
+    export $(cat .env | grep -v '#' | xargs)
+else
+    echo "Error: .env file not found. Copy .env.example to .env and configure it."
+    exit 1
+fi
+
+# Check required environment variables
+required_vars=("PROJECT_ID" "REGISTRY" "REPOSITORY" "IMAGE_NAME" "LOCAL_REGISTRY" "LOCAL_PROJECT" "LOCAL_REPOSITORY")
+for var in "${required_vars[@]}"; do
+    if [ -z "${!var}" ]; then
+        echo "Error: $var is not set in .env"
+        exit 1
+    fi
+done
+
+# Set tag
+TAG=${1:-${DEFAULT_TAG:-latest}}
 
 # Constructed image names
-LOCAL_TAG="${REGISTRY}/owl-wms/cond:${TAG}"
+LOCAL_TAG="${LOCAL_REGISTRY}/${LOCAL_PROJECT}/${LOCAL_REPOSITORY}:${TAG}"
 REMOTE_TAG="${REGISTRY}/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${TAG}"
 
 echo "Building Docker image..."
