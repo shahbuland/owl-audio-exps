@@ -55,6 +55,13 @@ The script will:
    num_nodes: 2            # Number of nodes
    ```
 
+### Prerequisites
+Make sure you're authenticated with Google Cloud:
+```bash
+gcloud auth login
+gcloud auth application-default login
+```
+
 ### Launch Training
 ```bash
 # Build and push your container
