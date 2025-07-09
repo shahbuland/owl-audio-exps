@@ -79,5 +79,6 @@ WORKDIR /app
 # Copy the entire application after dependencies are installed
 COPY . /app
 
-# Initialize git submodules if they exist
-RUN git submodule update --init --recursive || true
+# Initialize git submodules if they exist and checkout specified branch
+RUN git submodule update --init --recursive || true && \
+    git submodule foreach --recursive 'git checkout $branch || git checkout $sha1 || true'
