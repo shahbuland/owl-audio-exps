@@ -10,9 +10,11 @@ num_nodes: 2
 setup: |
   # Commands to run inside the container
   echo "Setting up multi-node training environment..."
+  cd /app
   
 run: |
   export LOGLEVEL=INFO
+  cd /app
   
   # Get the head node IP
   MASTER_ADDR=$(echo "$SKYPILOT_NODE_IPS" | head -n1)

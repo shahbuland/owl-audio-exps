@@ -48,10 +48,16 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app
 
-# Install minimal runtime dependencies
+# Install minimal runtime dependencies including OpenGL libraries for OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     git \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
