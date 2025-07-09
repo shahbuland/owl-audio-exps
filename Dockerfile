@@ -82,3 +82,6 @@ COPY . /app
 # Initialize git submodules if they exist and checkout specified branch
 RUN git submodule update --init --recursive || true && \
     git submodule foreach --recursive 'git checkout $branch || git checkout $sha1 || true'
+
+# Copy the environment file (Do this last)
+COPY .env .
