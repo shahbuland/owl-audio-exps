@@ -1,7 +1,7 @@
 name: owl-wms-multinode
 
 resources:
-  image_id: docker:us-central1-docker.pkg.dev/openworld-main/skypilot/owl-wm-cond:latest
+  image_id: docker:us-central1-docker.pkg.dev/openworld-main/skypilot/owl-wm-cond@sha256:7da080f97ff64751b5df26657d5204481ce668cbd21e8ffdc896db5d0b76d75f
   accelerators: H200:8
   cloud: kubernetes
 
@@ -27,4 +27,4 @@ run: |
     --master_addr=$MASTER_ADDR \
     --node_rank=${SKYPILOT_NODE_RANK} \
     --master_port=8008 \
-    train.py --config_path configs/av_v2_4x4.yml
+    train.py --config_path configs/av_v5_8x8_weak.yml

@@ -6,7 +6,6 @@ __pycache__
 .pytest_cache
 *.egg-info
 .DS_Store
-.git
 .github
 *.md
 README*
@@ -26,7 +25,6 @@ node_modules
 *.swp
 *.swo
 *~
-.env
 .env.local
 .env.development
 .env.test
@@ -47,5 +45,4 @@ examples
 *.test
 *.spec
 .gitattributes
-.gitmodules
 sky_config.yaml
