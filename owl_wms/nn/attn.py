@@ -19,7 +19,7 @@ def checkpoint(function, *args, **kwargs):
 def create_block_causal_mask(tokens, tokens_per_frame, device, dtype):
     frames = tokens // tokens_per_frame
     # Create base causal mask, nothing is masked
-    mask = torch.zeros(tokens, tokens, device = device, dtype = torch.bool)
+    mask = torch.zeros(tokens, tokens, device = device, dtype=dtype)
     
     # Allow attention within each frame and to previous frames, except last frame can't see first frame
     for i in range(frames):
@@ -27,11 +27,11 @@ def create_block_causal_mask(tokens, tokens_per_frame, device, dtype):
         end = (i + 1) * tokens_per_frame
         
         # Mask future frames
-        mask[start:end, end:] = True
+        mask[start:end, end:] = float('-inf')
         
         # For last frame, also mask first frame
         if i == frames - 1:
-            mask[start:end, :tokens_per_frame] = True
+            mask[start:end, :tokens_per_frame] = float('-inf')
         
     return mask
 
@@ -47,8 +47,8 @@ class Attn(nn.Module):
         self.qk_norm = QKNorm(config.d_model // config.n_heads)
         self.layer_ind = None
 
-        self.rope = FlatVideoRoPE(config)
-        #self.rope = FrameRoPE(config)
+        #self.rope = FlatVideoRoPE(config)
+        self.rope = FrameRoPE(config)
 
         self.tokens_per_frame = config.tokens_per_frame
         self.causal = config.causal
@@ -82,7 +82,7 @@ class Attn(nn.Module):
             if kv_cache.should_update:
                 kv_cache.update(new_k.clone(), new_v.clone(), self.layer_ind)
 
-            q,new_k = self.rope(q,new_k, kv_cache.offset)
+            q,new_k = self.rope(q, new_k, kv_cache.offset)
 
             mask = mask[:,:,-n_q:,:] # Only new queries
             x = F.scaled_dot_product_attention(q, new_k, new_v, attn_mask = mask)

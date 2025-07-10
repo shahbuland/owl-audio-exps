@@ -58,9 +58,9 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/av_v5_8x8_weak
-  output_path: /mnt/data/owl-wms/checkpoints/av_v5_8x8_weak
-  resume_ckpt: checkpoints/av_v5_8x8_weak/step_135000.pt
+  checkpoint_dir: checkpoints/av_v6_8x8
+  output_path: /mnt/data/owl-wms/checkpoints/av_v6_8x8
+  resume_ckpt: null #checkpoints/av_v5_8x8_weak/step_135000.pt
         
   sample_interval: 1000
   save_interval: 5000
