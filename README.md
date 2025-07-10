@@ -1,6 +1,45 @@
 # owl_wms
 Basic world models
 
+## Training
+
+### Single Node Setup
+
+```bash
+git clone https://github.com/wayfarer-labs/owl-wms
+cd owl-wms
+pip install -r requirements.txt
+git submodule init
+git submodule update
+cd owl-vaes
+git switch main
+pip install -r requirements.txt
+cd ..
+# Configure WandB
+wandb login
+```
+
+Then run training:
+```bash
+# Single GPU
+python train.py --config_path configs/basic.yml
+
+# Multi-GPU (single node)
+torchrun --nproc_per_node=8 train.py --config_path configs/basic.yml
+```
+
+### Multi-Node Training
+
+For multi-node distributed training:
+```bash
+torchrun --nproc_per_node=8 --nodes=2 train.py --config_path configs/av_v5_8x8_weak.yml
+```
+
+Or with SkyPilot:
+```bash
+sky launch --infra kubernetes --gpus H200:8 --num-nodes 2 --name <label> skypilot/config.yaml
+```
+
 ## Docker Build & Deploy (For multinode training)
 
 ### Setup
