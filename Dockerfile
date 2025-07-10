@@ -21,9 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv using the existing conda environment
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/conda/bin sh
-ENV PATH="/opt/conda/bin:${PATH}"
+# Install uv 
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 # Create working directory
 WORKDIR /app
@@ -33,8 +32,8 @@ COPY requirements.txt .
 
 # PyTorch is already installed in the NGC base image, skip PyTorch installation
 
-# Install other requirements from requirements.txt using conda's pip
-RUN /opt/conda/bin/uv pip install --system --break-system-packages -r requirements.txt
+# Install other requirements from requirements.txt using system python with uv
+RUN uv pip install --system --break-system-packages -r requirements.txt
 
 # Final stage - runtime image
 FROM nvcr.io/nvidia/pytorch:24.12-py3
@@ -58,8 +57,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Python is already configured in the NGC base image
 
-# Copy Python packages from builder stage
-COPY --from=builder /opt/conda /opt/conda
+# Copy installed packages from builder stage
+COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Create working directory
 WORKDIR /app
