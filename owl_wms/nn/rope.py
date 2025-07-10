@@ -35,12 +35,12 @@ class FlatVideoRoPE(nn.Module):
 
         self.register_buffer(
             "vid_freqs_cache",
-            self.pos_emb_video.get_axial_freqs(config.n_frames*1000, self.p, self.p),
+            self.pos_emb_video.get_axial_freqs(config.n_frames, self.p, self.p),
             persistent=False
         )
         self.register_buffer(
             "audio_freqs_cache",
-            self.pos_emb_audio.get_axial_freqs(config.n_frames*1000),
+            self.pos_emb_audio.get_axial_freqs(config.n_frames),
             persistent=False
         )
 
@@ -78,8 +78,10 @@ class FlatVideoRoPE(nn.Module):
 
         # Check for shape match between cache and k. If fail, reset cache
         with torch.no_grad():
-            vid_freqs = self.vid_freqs_cache[offset:offset+n]
-            audio_freqs = self.audio_freqs_cache[offset:offset+n]
+            #vid_freqs = self.vid_freqs_cache[offset:offset+n]
+            #audio_freqs = self.audio_freqs_cache[offset:offset+n]
+            vid_freqs = self.vid_freqs_cache[:n]
+            audio_freqs = self.audio_freqs_cache[:n]
             #vid_freqs = self.vid_freqs_cache[n-1].to(q.device,q.dtype)
             #audio_freqs = self.audio_freqs_cache[n-1].to(q.device,q.dtype)
 
@@ -137,7 +139,7 @@ class FrameRoPE(nn.Module):
             persistent=False
         )
     
-    def forward(self, q, k):
+    def forward(self, q, k, offset=0):
         b,h,_,d = k.shape
 
         # q|k is [b,h,n_frames*tokens_per_frame,d]
@@ -171,7 +173,7 @@ class FrameRoPE(nn.Module):
         # Right pad and bottom pad
         with torch.no_grad():
             right_pad = torch.zeros(b, h, n, self.p, 1, d, device=k.device, dtype=k.dtype)
-            bottom_pad = torch.zeros(b, h, 1, self.p+1, d, device=k.device, dtype=k.dtype)
+            bottom_pad = torch.zeros(b, h, n, 1, self.p+1, d, device=k.device, dtype=k.dtype)
         
         q_video = torch.cat([q_video, right_pad[:,:,:n_q]], dim = -2)
         q_video = torch.cat([q_video, bottom_pad[:,:,:n_q]], dim = -3)
@@ -182,14 +184,17 @@ class FrameRoPE(nn.Module):
         q_video[:,:,:,-1,-1] = q_audio
         k_video[:,:,:,-1,-1] = k_audio
 
-        q_video = apply_rotary_emb(self.freqs[-n_q:].detach(), q_video)
-        k_video = apply_rotary_emb(self.freqs.detach(), k_video)
+        with torch.no_grad():
+            freqs = self.freqs[:n].detach()
+
+        q_video = apply_rotary_emb(freqs[-n_q:].detach(), q_video)
+        k_video = apply_rotary_emb(freqs.detach(), k_video)
 
         q_audio = q_video[:,:,:,-1,-1]
         k_audio = k_video[:,:,:,-1,-1]
 
-        q_video = q_video[:,:,:,-1,-1]
-        k_video = k_video[:,:,:,-1,-1]
+        q_video = q_video[:,:,:,:-1,:-1]
+        k_video = k_video[:,:,:,:-1,:-1]
 
         q_video = q_video.reshape(
             b,

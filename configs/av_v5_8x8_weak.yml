@@ -58,9 +58,9 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/av_v5_8x8_weak_ddp
-  output_path: /mnt/data/owl-wms/checkpoints/av_v5_8x8_weak_ddp
-  resume_checkpoint: null
+  checkpoint_dir: checkpoints/av_v6_8x8
+  output_path: /mnt/data/owl-wms/checkpoints/av_v6_8x8
+  resume_ckpt: null #checkpoints/av_v5_8x8_weak/step_135000.pt
         
   sample_interval: 1000
   save_interval: 5000
@@ -89,6 +89,6 @@ train:
   audio_vae_ckpt_path: /mnt/data/checkpoints/cache_for_wm/sf_v0/cod_audio.pt
 
 wandb:
-  name: louiscastricato
+  name: shahbuland
   project: video_models
   run_name: av_v2_4x4
