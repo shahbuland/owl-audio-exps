@@ -80,9 +80,9 @@ class Attn(nn.Module):
             new_v = torch.cat([old_v, v], dim = 2).contiguous()
 
             if kv_cache.should_update:
-                kv_cache.update(new_k, new_v, self.layer_ind)
+                kv_cache.update(new_k.clone(), new_v.clone(), self.layer_ind)
 
-            q,new_k = self.rope(q,new_k)
+            q,new_k = self.rope(q,new_k, kv_cache.offset)
 
             mask = mask[:,:,-n_q:,:] # Only new queries
             x = F.scaled_dot_product_attention(q, new_k, new_v, attn_mask = mask)

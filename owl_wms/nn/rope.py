@@ -35,31 +35,17 @@ class FlatVideoRoPE(nn.Module):
 
         self.register_buffer(
             "vid_freqs_cache",
-            self.pos_emb_video.get_axial_freqs(config.n_frames, self.p, self.p),
+            self.pos_emb_video.get_axial_freqs(config.n_frames*1000, self.p, self.p),
             persistent=False
         )
         self.register_buffer(
             "audio_freqs_cache",
-            self.pos_emb_audio.get_axial_freqs(config.n_frames),
+            self.pos_emb_audio.get_axial_freqs(config.n_frames*1000),
             persistent=False
         )
 
-        #def get_freqs_video(n_frames):
-        #    return self.pos_emb_video.get_axial_freqs(n_frames, self.p, self.p)
-
-        #def get_freqs_audio(n_frames):
-        #    return self.pos_emb_audio.get_axial_freqs(n_frames)
-
-        #self.vid_freqs_cache = [
-        #    get_freqs_video(i+1) for i in range(config.n_frames)
-        #]
-
-        #self.audio_freqs_cache = [
-        #    get_freqs_audio(i+1) for i in range(config.n_frames)
-        #]
-
     #@torch.compile(mode='max-autotune', dynamic=False, fullgraph=True)
-    def forward(self, q, k):
+    def forward(self, q, k, offset = 0):
         b,h,_,d = k.shape
 
         # q|k is [b,h,n_frames*tokens_per_frame,d]
@@ -92,8 +78,8 @@ class FlatVideoRoPE(nn.Module):
 
         # Check for shape match between cache and k. If fail, reset cache
         with torch.no_grad():
-            vid_freqs = self.vid_freqs_cache[:n]
-            audio_freqs = self.audio_freqs_cache[:n]
+            vid_freqs = self.vid_freqs_cache[offset:offset+n]
+            audio_freqs = self.audio_freqs_cache[offset:offset+n]
             #vid_freqs = self.vid_freqs_cache[n-1].to(q.device,q.dtype)
             #audio_freqs = self.audio_freqs_cache[n-1].to(q.device,q.dtype)
 

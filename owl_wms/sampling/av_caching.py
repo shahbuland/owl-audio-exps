@@ -146,11 +146,10 @@ class AVCachingOneStepSampler:
             # Update
             new_frame = new_frame - pred_video
             new_audio = new_audio - pred_audio
-            ts = ts * 0.0
 
             # Update cache
             kv_cache.enable_cache_updates()
-            model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
+            model(new_frame, new_audio, ts * 0.0, new_mouse, new_btn, kv_cache=kv_cache)
             kv_cache.disable_cache_updates()
 
             # Add to history

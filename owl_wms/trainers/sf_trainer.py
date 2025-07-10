@@ -89,7 +89,7 @@ class RolloutManager:
 
             with torch.no_grad():
                 kv_cache.enable_cache_updates()
-                model(frame_b1chw, audio_b1c, ts_b1*0, mouse_b1d, btn_b1d)
+                model(frame_b1chw, audio_b1c, ts_b1*0, mouse_b1d, btn_b1d, kv_cache=kv_cache)
                 kv_cache.disable_cache_updates()
 
             video_bnchw = torch.cat([video_bnchw, frame_b1chw], dim = 1)

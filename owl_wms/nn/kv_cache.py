@@ -13,8 +13,9 @@ class KVCache:
         
         self.should_update = False
 
-        self.max_length = config.tokens_per_frame * config.n_frames
+        self.max_length = None
         self.noise_caches = 0.0
+        self.offset = 0
 
     def enable_cache_updates(self):
         self.should_update = True
@@ -31,6 +32,7 @@ class KVCache:
         shape = (batch_size, self.config.n_heads, 0, self.config.d_model//self.config.n_heads)
         dummy = torch.empty(*shape, device = self.device, dtype = self.dtype)
         self.cache = [(torch.empty_like(dummy), torch.empty_like(dummy)) for _ in range(self.config.n_layers)]
+        self.offset = 0
         
     @torch.no_grad()
     def get(self, layer_ind):
@@ -58,7 +60,10 @@ class KVCache:
             v = v[:,:,-self.max_length:]
             return k, v
 
-        self.cache[layer_ind] = tuple_truncate(new_k,new_v)
+        if self.max_length is None:
+            self.cache[layer_ind] = (new_k,new_v)
+        else:
+            self.cache[layer_ind] = tuple_truncate(new_k,new_v)
     
     @torch.no_grad()
     def truncate(self, truncate_amt, front = False):
@@ -77,6 +82,9 @@ class KVCache:
 
         for i in range(self.config.n_layers):
             self.cache[i] = tuple_truncate(*self.cache[i])
+        if not front:
+            # When ejecting front frame, window slides forward, offset increases
+            self.offset += truncate_amt // self.config.tokens_per_frame
 
     def length_at(self, idx):
         return self.cache[idx][0].shape[2]
