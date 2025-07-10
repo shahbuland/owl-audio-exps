@@ -52,7 +52,7 @@ class Attn(nn.Module):
 
         self.tokens_per_frame = config.tokens_per_frame
         self.causal = config.causal
-
+    
     def forward(self, x, kv_cache = None):
         qkv = self.qkv(x)
         qkv = qkv.view(qkv.shape[0], qkv.shape[1], 3, self.n_heads, -1)
