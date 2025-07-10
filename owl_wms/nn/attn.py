@@ -19,7 +19,7 @@ def checkpoint(function, *args, **kwargs):
 def create_block_causal_mask(tokens, tokens_per_frame, device, dtype):
     frames = tokens // tokens_per_frame
     # Create base causal mask, nothing is masked
-    mask = torch.zeros(tokens, tokens, device = device, dtype = torch.bool)
+    mask = torch.ones(tokens, tokens, device = device, dtype = torch.bool)
     
     # Allow attention within each frame and to previous frames, except last frame can't see first frame
     for i in range(frames):
@@ -27,11 +27,11 @@ def create_block_causal_mask(tokens, tokens_per_frame, device, dtype):
         end = (i + 1) * tokens_per_frame
         
         # Mask future frames
-        mask[start:end, end:] = True
+        mask[start:end, end:] = False
         
         # For last frame, also mask first frame
         if i == frames - 1:
-            mask[start:end, :tokens_per_frame] = True
+            mask[start:end, :tokens_per_frame] = False
         
     return mask
 
@@ -52,7 +52,7 @@ class Attn(nn.Module):
 
         self.tokens_per_frame = config.tokens_per_frame
         self.causal = config.causal
-
+    
     def forward(self, x, kv_cache = None):
         qkv = self.qkv(x)
         qkv = qkv.view(qkv.shape[0], qkv.shape[1], 3, self.n_heads, -1)

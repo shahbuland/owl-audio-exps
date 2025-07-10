@@ -62,7 +62,7 @@ The script will:
    gcloud auth application-default login
    ```
 
-2. Make sure you set environment variables, including WANDB_API_KEY. Note! The model will NOT train without this.
+2. Make sure you set your Project ID for google cloud.
 
 ### Launch Training
 ```bash
