@@ -17,3 +17,6 @@ def get_trainer_cls(trainer_id):
     if trainer_id == "sforce2":
         from .self_forcing_stage_2 import SelfForceTrainer
         return SelfForceTrainer
+    if trainer_id == "sforce3":
+        from .sf_trainer import SelfForceTrainer
+        return SelfForceTrainer

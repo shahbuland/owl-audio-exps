@@ -21,6 +21,8 @@ class BaseTrainer:
         self.train_cfg = train_cfg
         self.logging_cfg = logging_cfg
         self.model_cfg = model_cfg
+
+        self.device = f'cuda:{self.local_rank}'
         
         # Check if we have an api key, if we don't just load the dotenv.
         wandb_api_key = os.getenv("WANDB_API_KEY")

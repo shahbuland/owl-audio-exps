@@ -9,16 +9,17 @@ from ..utils import versatile_load, freeze, unfreeze, Timer
 from ..models import get_model_cls
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 from ..utils import batch_permute_to_length
+from ..nn.kv_cache import KVCache
+from ..utils.logging import LogHelper, to_wandb_av
+from ..data import get_loader
+from ..sampling import get_sampler_cls
 
 from copy import deepcopy
 from ema_pytorch import EMA
 import einops as eo
 from contextlib import nullcontext
 import random
-
-def get_ts(b,n):
-    # U(0.02, 0.98)
-    return torch.rand(b,n) * 0.96 + 0.02
+import wandb
 
 # === ROLLOUTS ===
 
@@ -27,7 +28,6 @@ class RolloutManager:
         self.model_cfg = model_cfg
         self.min_rollout_frames = min_rollout_frames
     
-    @torch.no_grad()
     def get_rollouts(
         self, 
         model,
@@ -55,10 +55,11 @@ class RolloutManager:
         rollout_btn_bnd = ext_btn_bnd[:,window_length:]
 
         # === cache context frames ===
-        kv_cache.enable_cache_updates()
-        ts_bn = torch.zeros_like(video_bnchw[:,:,0,0,0]) # "clean" ts
-        model(video_bnchw, audio_bnc, ts_bn, mouse_bnd, btn_bnd, kv_cache=kv_cache)
-        kv_cache.disable_cache_updates()
+        with torch.no_grad():
+            kv_cache.enable_cache_updates()
+            ts_bn = torch.zeros_like(video_bnchw[:,:,0,0,0]) # "clean" ts
+            model(video_bnchw, audio_bnc, ts_bn, mouse_bnd, btn_bnd, kv_cache=kv_cache)
+            kv_cache.disable_cache_updates()
 
         # === rollout time! ===
         for frame_idx in range(rollout_frames):
@@ -86,9 +87,10 @@ class RolloutManager:
             frame_b1chw = frame_b1chw - vid_pred_b1chw
             audio_b1c = audio_b1c - aud_pred_b1c
 
-            kv_cache.enable_cache_updates()
-            model(frame_b1chw, audio_b1c, ts_b1*0, mouse_b1d, btn_b1d)
-            kv_cache.disable_cache_updates()
+            with torch.no_grad():
+                kv_cache.enable_cache_updates()
+                model(frame_b1chw, audio_b1c, ts_b1*0, mouse_b1d, btn_b1d)
+                kv_cache.disable_cache_updates()
 
             video_bnchw = torch.cat([video_bnchw, frame_b1chw], dim = 1)
             audio_bnc = torch.cat([audio_bnc, audio_b1c], dim = 1)
@@ -120,10 +122,10 @@ def get_critic_loss(
         )
 
         # Get ts ~ U(0.02, 0.98)
-        ts_bn = torch.rand(b,n) * 0.96 + 0.02
-        ts_bn = ts.to(video_bnchw.device, video_bnchw.dtype)
-        ts_bn_exp = ts[:,:,None,None,None]
-        ts_bn_exp_audio = ts[:,:,None]
+        ts_bn = torch.rand(video_bnchw.shape[0], video_bnchw.shape[1]) * 0.96 + 0.02
+        ts_bn = ts_bn.to(video_bnchw.device, video_bnchw.dtype)
+        ts_bn_exp = ts_bn[:,:,None,None,None]
+        ts_bn_exp_audio = ts_bn[:,:,None]
 
         # Noise student outputs and get target
         z_vid_bnchw = torch.randn_like(video_bnchw)
@@ -156,28 +158,34 @@ def get_dmd_loss(
     cfg_scale = 1.3
 ):
     # Get rollout
+    video_bnchw, audio_bnc, mouse_bnd, btn_bnd, rollout_frames = rollout_manager.get_rollouts(
+        model = student,
+        video_bnchw = video_bnchw,
+        audio_bnc = audio_bnc,
+        mouse_bnd = mouse_bnd,
+        btn_bnd = btn_bnd,
+        enable_grad = True
+    )
     with torch.no_grad():
-        video_bnchw, audio_bnc, mouse_bnd, btn_bnd, rollout_frames = rollout_manager.get_rollouts(
-            model = student,
-            video_bnchw = video_bnchw,
-            audio_bnc = audio_bnc,
-            mouse_bnd = mouse_bnd,
-            btn_bnd = btn_bnd
-        )
         mask_length = video_bnchw.shape[1] - rollout_frames
 
         # Get ts ~ U(0.02, 0.98)
-        ts_bn = torch.rand(b,n) * 0.96 + 0.02
-        ts_bn = ts.to(video_bnchw.device, video_bnchw.dtype)
-        ts_bn_exp = ts[:,:,None,None,None]
-        ts_bn_exp_audio = ts[:,:,None]
+        ts_bn = torch.rand(video_bnchw.shape[0], video_bnchw.shape[1]) * 0.96 + 0.02
+        ts_bn = ts_bn.to(video_bnchw.device, video_bnchw.dtype)
+        ts_bn_exp = ts_bn[:,:,None,None,None]
+        ts_bn_exp_audio = ts_bn[:,:,None]
+
+        # Get noise
+        z_vid_bnchw = torch.randn_like(video_bnchw)
+        z_aud_bnc = torch.randn_like(audio_bnc)
         
+        # Noise up the samples
         noisy_vid_bnchw = video_bnchw * (1. - ts_bn_exp) + z_vid_bnchw * ts_bn_exp
         noisy_aud_bnc = audio_bnc * (1. - ts_bn_exp_audio) + z_aud_bnc * ts_bn_exp_audio
 
         # Masks for cfg
-        uncond_mask = torch.zeros(b, dtype=torch.bool, device=video_bnchw.device)
-        cond_mask = torch.ones(b, dtype=torch.bool, device=video_bnchw.device)
+        uncond_mask = torch.zeros(video_bnchw.shape[0], dtype=torch.bool, device=video_bnchw.device)
+        cond_mask = torch.ones(video_bnchw.shape[0], dtype=torch.bool, device=video_bnchw.device)
         
         # Get velocities from teacher
         vid_pred_uncond, aud_pred_uncond = teacher(
@@ -351,8 +359,8 @@ class SelfForceTrainer(BaseTrainer):
 
         # DDP
         if self.world_size > 1:
-            self.student = DDP(self.student)
-            self.critic = DDP(self.critic)
+            self.student = DDP(self.student, find_unused_parameters=True)
+            self.critic = DDP(self.critic, find_unused_parameters=True)
 
         # Ema model
         self.ema = EMA(
@@ -368,7 +376,7 @@ class SelfForceTrainer(BaseTrainer):
         audio_decode_fn = make_batched_audio_decode_fn(self.audio_decoder, batch_size=self.train_cfg.vae_batch_size)
 
         # Initialize optimizers and scalers and amp context
-        self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
+        self.opt = getattr(torch.optim, self.train_cfg.opt)(self.student.parameters(), **self.train_cfg.opt_kwargs)
         self.critic_opt = getattr(torch.optim, self.train_cfg.opt)(self.critic.parameters(), **self.train_cfg.d_opt_kwargs)
         self.scaler = torch.amp.GradScaler()
         self.critic_scaler = torch.amp.GradScaler()
@@ -385,6 +393,7 @@ class SelfForceTrainer(BaseTrainer):
         
         # Dataset and sampling prep
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
+        loader = iter(loader)
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
         rollout_manager = RolloutManager(self.model_cfg, self.train_cfg.min_rollout_frames)
 
@@ -400,6 +409,13 @@ class SelfForceTrainer(BaseTrainer):
             optimizer.zero_grad(set_to_none=True)
             scaler.update()
 
+        # simplify getting batches
+        def get_batch():
+            vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = next(loader)
+            vid_bnchw = vid_bnchw / self.train_cfg.vae_scale
+            aud_bnc = aud_bnc / self.train_cfg.audio_vae_scale
+            return vid_bnchw.to(self.device), aud_bnc.to(self.device), mouse_bnd.to(self.device), btn_bnd.to(self.device)
+
         # === training loop ===
         while True:
             freeze(self.student)
@@ -407,9 +423,7 @@ class SelfForceTrainer(BaseTrainer):
 
             for _ in range(self.train_cfg.update_ratio):
                 for _ in range(accum_steps):
-                    vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = next(loader)
-                    vid_bnchw = vid_bnchw / self.train_cfg.vae_scale
-                    aud_bnc = aud_bnc / self.train_cfg.audio_vae_scale
+                    vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = get_batch()
                     
                     with ctx:
                         critic_loss = get_critic_loss(
@@ -430,9 +444,7 @@ class SelfForceTrainer(BaseTrainer):
             unfreeze(self.student)
 
             for _ in range(accum_steps):
-                vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = next(loader)
-                vid_bnchw = vid_bnchw / self.train_cfg.vae_scale
-                aud_bnc = aud_bnc / self.train_cfg.audio_vae_scale
+                vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = get_batch()
                 
                 with ctx:
                     dmd_loss = get_dmd_loss(
@@ -464,9 +476,7 @@ class SelfForceTrainer(BaseTrainer):
                 if self.total_step_counter % self.train_cfg.sample_interval == 0:
                     with ctx:
                         n_samples = self.train_cfg.n_samples
-                        vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = next(loader)
-                        vid_bnchw = vid_bnchw / self.train_cfg.vae_scale
-                        aud_bnc = aud_bnc / self.train_cfg.audio_vae_scale
+                        vid_bnchw, aud_bnc, mouse_bnd, btn_bnd = get_batch()
 
                         vid_bnchw = vid_bnchw[:n_samples]
                         aud_bnc = aud_bnc[:n_samples]
