@@ -20,21 +20,42 @@ from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, mak
 
 from ..nn.kv_cache import KVCache
 import random
+from ..utils import batch_permute_to_length
 
 """
 Notes:
 Additional train cfg things:
-1. n_rollout_frames
+1. rollout_frames (how many frames to generate))
+2. update_ratio (how many times to update the score model)
+3. rollout_steps (diffusion steps per rollout)
 
 Model should be core since the wrapper is useless
 """
 
+class DeterministicRNG:
+    def __init__(self, seed=0):
+        self.seed = seed
+        self.call_count = 0
+
+    def __call__(self, low, high):
+        return 8
+        self.call_count += 1
+
+        # Use a combination of seed and call_count to generate deterministic values
+        # Mix the seed with call_count using XOR and multiplication for better distribution
+        combined = (self.seed ^ (self.call_count * 1103515245)) % (2**32)
+        # Map to range [low, high] inclusive
+        range_size = high - low + 1
+        return low + (combined % range_size)
+
+RNG_HANDLER = DeterministicRNG()
+
 class RolloutHandler:
-    def __init__(self, model_cfg, batch_size, context_frames, sampling_steps = 3):
+    def __init__(self, model_cfg, batch_size, min_rollout_frames, sampling_steps = 3):
         self.batch_size = batch_size
         self.model_cfg = model_cfg
 
-        self.context_frames = context_frames
+        self.min_rollout_frames = min_rollout_frames
         self.sampling_steps = sampling_steps
         self.window_size = model_cfg.n_frames
 
@@ -50,14 +71,16 @@ class RolloutHandler:
         kv_cache = KVCache(self.model_cfg)
         kv_cache.reset(self.batch_size)
 
-        context_video = video[:,:self.context_frames]
-        context_audio = audio[:,:self.context_frames]
-        
-        context_mouse = mouse[:,:self.context_frames]
-        context_btn = btn[:,:self.context_frames] 
+        context_frames = video.shape[1]
+        rollout_frames = RNG_HANDLER(self.min_rollout_frames, context_frames)
+        extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, rollout_frames+context_frames)
+        target_mouse = extended_mouse[:,rollout_frames:]
+        target_btn = extended_btn[:,rollout_frames:]
 
-        target_mouse = mouse[:,self.context_frames:]
-        target_btn = btn[:,self.context_frames:]
+        context_video = video
+        context_audio = audio
+        context_mouse = mouse
+        context_btn = btn
 
         b,n,_,_,_ = context_video.shape
         kv_cache.enable_cache_updates()
@@ -66,7 +89,6 @@ class RolloutHandler:
         kv_cache.disable_cache_updates()
 
         # timesteps from 0.25,0.5,0.75,1.0
-        rollout_frames = video.shape[1] - self.context_frames 
         for frame_idx in range(rollout_frames):
             ts = torch.ones_like(context_video[:,0:1,0,0,0])
             dt = 1. / self.sampling_steps
@@ -93,7 +115,12 @@ class RolloutHandler:
             context_video = torch.cat([context_video, new_frame], dim = 1)
             context_audio = torch.cat([context_audio, new_audio], dim = 1)
     
-        return context_video, context_audio
+        context_video = context_video[:,-context_frames:]
+        context_audio = context_audio[:,-context_frames:]
+        context_mouse = extended_mouse[:,-context_frames:]
+        context_btn = extended_btn[:,-context_frames:]
+
+        return context_video, context_audio, context_mouse, context_btn, rollout_frames
 
     def sample_for_dmd(
         self,
@@ -109,36 +136,40 @@ class RolloutHandler:
         kv_cache = KVCache(self.model_cfg)
         kv_cache.reset(self.batch_size)
 
-        context_video = video[:, :self.context_frames]
-        context_audio = audio[:, :self.context_frames]
+        context_frames = video.shape[1]
+        rollout_frames = RNG_HANDLER(self.min_rollout_frames, context_frames)
+        extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, rollout_frames+context_frames)
+    
+        context_video = video
+        context_audio = audio
+        context_mouse = mouse
+        context_btn = btn
 
-        context_mouse = mouse[:, :self.context_frames]
-        context_btn   = btn[:,   :self.context_frames]
-
-        target_mouse  = mouse[:, self.context_frames:]
-        target_btn    = btn[:,   self.context_frames:]
+        target_mouse = extended_mouse[:, rollout_frames:]
+        target_btn = extended_btn[:, rollout_frames:]
 
         # Seed the cache with the conditioning context
         with torch.no_grad():
             ts = torch.zeros_like(context_video[:, :, 0, 0, 0])
             kv_cache.enable_cache_updates()
-            _ = model(context_video,
-                    context_audio,
-                    ts,
-                    context_mouse,
-                    context_btn,
-                    kv_cache=kv_cache)
+            _ = model(
+                context_video,
+                context_audio,
+                ts,
+                context_mouse,
+                context_btn,
+                kv_cache=kv_cache
+            )
             kv_cache.disable_cache_updates()
 
         # ------------------------------------------------------------------ #
         # ❸  Autoregressive rollout                                          #
         # ------------------------------------------------------------------ #
-        rollout_frames = video.shape[1] - self.context_frames
         dt             = 1.0 / self.sampling_steps
 
         for frame_idx in range(rollout_frames):
             # -------------------------------------------------------------- #
-            # Pick the “special” diffusion step s (0-based) that keeps grads #
+            # Pick the "special" diffusion step s (0-based) that keeps grads #
             # -------------------------------------------------------------- #
             s = random.randint(0, self.sampling_steps - 1)
 
@@ -158,14 +189,12 @@ class RolloutHandler:
             for step in range(self.sampling_steps):
                 if step == s:
                     # ONE step per frame keeps the computation graph
-                    kv_cache.enable_cache_updates()
                     vid_pred, aud_pred = model(new_frame,
                                                 new_audio,
                                                 ts,
                                                 new_mouse,
                                                 new_btn,
                                                 kv_cache=kv_cache)
-                    kv_cache.disable_cache_updates()
 
                     new_frame = new_frame - dt * vid_pred
                     new_audio = new_audio - dt * aud_pred
@@ -188,6 +217,10 @@ class RolloutHandler:
                     new_audio = new_audio - dt * aud_pred
                     ts        = ts - dt
 
+            with torch.no_grad():
+                kv_cache.enable_cache_updates()
+                _ = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
+                kv_cache.disable_cache_updates()
             # -------------------------------------------------------------- #
             # Extend the running context that the next frame will condition  #
             # on.                                                            #
@@ -198,7 +231,13 @@ class RolloutHandler:
         # ------------------------------------------------------------------ #
         # ❹  Return the fully-generated rollout                              #
         # ------------------------------------------------------------------ #
-        return context_video, context_audio
+
+        context_video = context_video[:,-context_frames:]
+        context_audio = context_audio[:,-context_frames:]
+        context_mouse = extended_mouse[:,-context_frames:]
+        context_btn = extended_btn[:,-context_frames:]
+
+        return context_video, context_audio, context_mouse, context_btn, rollout_frames
             
 class SelfForceTrainer(BaseTrainer):
     """
@@ -322,7 +361,7 @@ class SelfForceTrainer(BaseTrainer):
         self.ema = EMA(
             self.model,
             beta = 0.99,
-            update_after_step = 200,
+            update_after_step = 0,
             update_every = 1
         )
         # Hard coded stuff, probably #TODO figure out where to put this?
@@ -359,14 +398,14 @@ class SelfForceTrainer(BaseTrainer):
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
-        rollouts = RolloutHandler(self.model_cfg, self.train_cfg.batch_size, self.train_cfg.context_frames, self.train_cfg.rollout_steps)
+        rollouts = RolloutHandler(self.model_cfg, self.train_cfg.batch_size, self.train_cfg.min_rollout_frames, self.train_cfg.rollout_steps)
 
         # Simplifiying assumptions: data will never stop iter, no grad accum
 
         def sample_from_gen(vid, audio, mouse, btn, for_dmd=False):
             # Use rollout handler to generate samples
             if for_dmd:
-                video_samples, audio_samples = rollouts.sample_for_dmd(
+                video_samples, audio_samples, mouse_samples, btn_samples, rollout_frames = rollouts.sample_for_dmd(
                     self.model,
                     vid,
                     audio, 
@@ -374,82 +413,85 @@ class SelfForceTrainer(BaseTrainer):
                     btn
                 )
             else:
-                video_samples, audio_samples = rollouts.sample_for_critic(
+                video_samples, audio_samples, mouse_samples, btn_samples, rollout_frames = rollouts.sample_for_critic(
                     self.model,
                     vid,
                     audio, 
                     mouse,
                     btn
                 )
-            return video_samples, audio_samples
+            return video_samples, audio_samples, mouse_samples, btn_samples, rollout_frames
 
         # TODO account for n_context_frames in gradients
-        def get_dmd_loss(vid, audio, mouse, btn):
+        def get_dmd_loss(vid, audio, mouse, btn, rollout_frames):
             s_real_fn = self.score_real.core
             s_fake_fn = self.score_fake.module.core if self.world_size > 1 else self.score_fake.core
-            n_context_frames = self.train_cfg.context_frames
+            n_context_frames = vid.shape[1] - rollout_frames
 
             with torch.no_grad():
                 b,n,c,h,w = vid.shape
-                ts = torch.randn(b,n,device=vid.device,dtype=vid.dtype).sigmoid()
+                ts = torch.rand(b,n,device=vid.device, dtype=vid.dtype) * 0.96 + 0.02
                 z_vid = torch.randn_like(vid)
                 z_audio = torch.randn_like(audio)
                 ts_exp = ts[:,:,None,None,None]
                 ts_exp_audio = ts[:,:,None]
 
-            lerpd_video = vid * (1. - ts_exp) + z_vid * ts_exp
-            lerpd_audio = audio * (1. - ts_exp_audio) + z_audio * ts_exp_audio
+                lerpd_video = vid * (1. - ts_exp) + z_vid * ts_exp
+                lerpd_audio = audio * (1. - ts_exp_audio) + z_audio * ts_exp_audio
 
-            null_mouse = torch.zeros_like(mouse)
-            null_btn = torch.zeros_like(btn)
+                null_mouse = torch.zeros_like(mouse)
+                null_btn = torch.zeros_like(btn)
 
-            # Create masks for conditional and unconditional branches
-            uncond_mask = torch.zeros(b, dtype=torch.bool, device=vid.device)
-            cond_mask = torch.ones(b, dtype=torch.bool, device=vid.device)
+                # Create masks for conditional and unconditional branches
+                uncond_mask = torch.zeros(b, dtype=torch.bool, device=vid.device)
+                cond_mask = torch.ones(b, dtype=torch.bool, device=vid.device)
 
-            # Get unconditional predictions
-            vid_pred_uncond, aud_pred_uncond = s_real_fn(lerpd_video, lerpd_audio, ts, null_mouse, null_btn, has_controls=uncond_mask)
-            
-            # Get conditional predictions
-            vid_pred_cond, aud_pred_cond = s_real_fn(lerpd_video, lerpd_audio, ts, mouse, btn, has_controls=cond_mask)
+                # === GET ALL SCORES/VELOCITIES === #
 
-            # Apply CFG
-            s_real_vid = vid_pred_uncond + self.cfg_scale * (vid_pred_cond - vid_pred_uncond)
-            s_real_aud = aud_pred_uncond + self.cfg_scale * (aud_pred_cond - aud_pred_uncond)
+                # Get unconditional predictions
+                vid_pred_uncond, aud_pred_uncond = s_real_fn(lerpd_video, lerpd_audio, ts, null_mouse, null_btn, has_controls=uncond_mask)
+                
+                # Get conditional predictions
+                vid_pred_cond, aud_pred_cond = s_real_fn(lerpd_video, lerpd_audio, ts, mouse, btn, has_controls=cond_mask)
 
-            # Get fake score predictions
-            s_fake_vid, s_fake_aud = s_fake_fn(lerpd_video, lerpd_audio, ts, mouse, btn, has_controls=cond_mask)
+                # Apply CFG
+                s_real_vid = vid_pred_uncond + self.cfg_scale * (vid_pred_cond - vid_pred_uncond)
+                s_real_aud = aud_pred_uncond + self.cfg_scale * (aud_pred_cond - aud_pred_uncond)
 
-            # Calculate gradients
-            grad_vid = (s_fake_vid - s_real_vid)
-            grad_aud = (s_fake_aud - s_real_aud)
+                # Get fake score predictions
+                s_fake_vid, s_fake_aud = s_fake_fn(lerpd_video, lerpd_audio, ts, mouse, btn, has_controls=cond_mask)
 
-            # Normalize video gradient
-            p_real_vid = (vid - s_real_vid)
-            vid_normalizer = torch.abs(p_real_vid).mean(dim=[1,2,3,4],keepdim=True)
-            grad_vid = grad_vid / (vid_normalizer + 1.0e-6)
+                # === GET PREDICTIONS === #
+                real_pred_video = lerpd_video - ts_exp * s_real_vid
+                fake_pred_video = lerpd_video - ts_exp * s_fake_vid
+                real_pred_audio = lerpd_audio - ts_exp_audio * s_real_aud
+                fake_pred_audio = lerpd_audio - ts_exp_audio * s_fake_aud
 
-            # Normalize audio gradient
-            p_real_aud = (audio - s_real_aud)
-            aud_normalizer = torch.abs(p_real_aud).mean(dim=[1,2],keepdim=True)
-            grad_aud = grad_aud / (aud_normalizer + 1.0e-6)
+                # === GET NORMALIZERS === #
+                vid_normalizer = torch.abs(vid - real_pred_video).mean(dim=[1,2,3,4],keepdim=True).clamp(min=1.0e-6)
+                aud_normalizer = torch.abs(audio - real_pred_audio).mean(dim=[1,2],keepdim=True).clamp(min=1.0e-6)
 
-            grad_vid = torch.nan_to_num(grad_vid)
-            grad_aud = torch.nan_to_num(grad_aud)
+                # === GET GRADIENTS === #
+                grad_vid = (fake_pred_video - real_pred_video) / vid_normalizer
+                grad_aud = (fake_pred_audio - real_pred_audio) / aud_normalizer
+                grad_vid = torch.nan_to_num(grad_vid, nan=0.0)
+                grad_aud = torch.nan_to_num(grad_aud, nan=0.0)
 
-            grad_mask = torch.ones_like(vid[:,:,0,0,0])  # [b,n]
-            grad_mask[:,:n_context_frames] = 0  # Zero out context frames
-            vid_grad_mask = grad_mask.view(vid.shape[0], vid.shape[1], 1, 1, 1)  # [b,n,1,1,1]
-            aud_grad_mask = grad_mask.view(vid.shape[0], vid.shape[1], 1) # [b,n,1]
+                # === GET MASK === #
+
+                grad_mask = torch.ones_like(vid[:,:,0,0,0])  # [b,n]
+                grad_mask[:,:n_context_frames] = 0  # Zero out context frames
+                vid_grad_mask = grad_mask.view(vid.shape[0], vid.shape[1], 1, 1, 1)  # [b,n,1,1,1]
+                aud_grad_mask = grad_mask.view(vid.shape[0], vid.shape[1], 1) # [b,n,1]
 
             # Calculate losses
             vid_loss = 0.5 * F.mse_loss(
                 vid.double() * vid_grad_mask, 
-                (vid.double() - grad_vid.double()) * vid_grad_mask
+                (vid.double() - grad_vid.double()).detach() * vid_grad_mask
             )
             aud_loss = 0.5 * F.mse_loss(
                 audio.double() * aud_grad_mask,
-                (audio.double() - grad_aud.double()) * aud_grad_mask
+                (audio.double() - grad_aud.double()).detach() * aud_grad_mask
             )
 
             # Return average loss
@@ -458,7 +500,7 @@ class SelfForceTrainer(BaseTrainer):
         def optimizer_step(model, scaler, optimizer):
             # Assumes loss.backward() was already called
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
             scaler.step(optimizer)
             optimizer.zero_grad(set_to_none=True)
             scaler.update()
@@ -485,9 +527,9 @@ class SelfForceTrainer(BaseTrainer):
      
                     with ctx:
                         with torch.no_grad():
-                            video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, for_dmd=False)
+                            video_samples, audio_samples, mouse_samples, btn_samples, _ = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, for_dmd=False)
                         
-                        s_fake_loss = self.score_fake(video_samples, audio_samples, batch_mouse, batch_btn)
+                        s_fake_loss = self.score_fake(video_samples, audio_samples, mouse_samples, btn_samples)
                         self.s_fake_scaler.scale(s_fake_loss / accum_steps).backward()
 
                     metrics.log('s_fake_loss', s_fake_loss/accum_steps)
@@ -506,8 +548,8 @@ class SelfForceTrainer(BaseTrainer):
                 batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
                 with ctx:
-                    video_samples, audio_samples = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, for_dmd=True)
-                    dmd_loss = get_dmd_loss(video_samples, audio_samples, batch_mouse, batch_btn)
+                    video_samples, audio_samples, mouse_samples, btn_samples, rollout_frames = sample_from_gen(batch_vid, batch_audio, batch_mouse, batch_btn, for_dmd=True)
+                    dmd_loss = get_dmd_loss(video_samples, audio_samples, mouse_samples, btn_samples, rollout_frames)
                     self.scaler.scale(dmd_loss / accum_steps).backward()
                 
                 metrics.log('dmd_loss', dmd_loss/accum_steps)
@@ -537,8 +579,15 @@ class SelfForceTrainer(BaseTrainer):
                         self.train_cfg.audio_vae_scale
                     ) # -> [b,n,c,h,w]
                     if self.rank == 0:
-                        video = to_wandb_av(samples, audio, sample_mouse, sample_button)
-                        wandb_dict['samples'] = video
+                        wandb_av_out = to_wandb_av(samples, audio, sample_mouse, sample_button)
+                        if len(wandb_av_out) == 3:  
+                            video, depth_gif, flow_gif = wandb_av_out
+                            wandb_dict['samples'] = video
+                            wandb_dict['depth_gif'] = depth_gif
+                            wandb_dict['flow_gif'] = flow_gif
+                        else:
+                            video = wandb_av_out
+                            wandb_dict['samples'] = video
                 
             if self.rank == 0:
                 wandb.log(wandb_dict)
