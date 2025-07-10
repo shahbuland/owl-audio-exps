@@ -3,7 +3,7 @@ model:
   sample_size: 8
   channels: 128
   audio_channels: 64
-  
+
   n_layers: 24
   n_heads: 24
   d_model: 1536
@@ -20,14 +20,12 @@ model:
   backbone: dit
 
 train:
-  trainer_id: mixed_av
-  data_id: cod_s3_mixed
+  trainer_id: sforce3
+  data_id: cod_s3_audio
   data_kwargs:
     window_length: 16
     bucket_name: cod-data-latent-360x640to4x4
-    cond_prefix: feats/labelled
-    uncond_prefix: feats/unlabelled
-    unlabelled_frac: 0.4
+    prefix: feats/labelled
     file_share_max: 50
 
   sample_data_id: cod_s3_audio
@@ -37,45 +35,37 @@ train:
     prefix: feats/labelled
     file_share_max: 50
 
-  target_batch_size: 256
-  batch_size: 32
+  target_batch_size: 64
+  batch_size: 8
 
   epochs: 200
-  enable_profiling: true
 
-#  opt: AdamW
-#  opt_kwargs:
-#    lr: 1.0e-4
-#    weight_decay: 1.0e-4
-#    eps: 1.0e-15
-#    betas: [0.9, 0.95]
-  opt: Muon
+  opt: AdamW
   opt_kwargs:
-    lr: 1.0e-3
-    momentum: 0.95
-    adamw_lr: 1.0e-4
-    adamw_wd: 1.0e-4
-    adamw_eps: 1.0e-15
-    adamw_betas: [0.9, 0.95]
-    adamw_keys: [core.proj_in, core.proj_out.proj]
+    lr: 2.0e-6
+    betas: [0.0, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
+  d_opt_kwargs:
+    lr: 4.0e-7
+    betas: [0.0, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
 
   scheduler: null
 
-  checkpoint_dir: ./checkpoints/av_v5_8x8_mixed_mfu
-  output_path: ./checkpoints/av_v5_8x8_mixed_mfu
-  resume_ckpt: null # checkpoints/av_v5_8x8/step_35000.pt
-        
-  sample_interval: 1000
-  save_interval: 5000
+  checkpoint_dir: checkpoints/av_v5_8x8_sf
+  output_path: /mnt/data/owl-wms/checkpoints/av_v5_8x8_sf
+  resume_ckpt: null # checkpoints/av_v5_8x8_sf/step_35000.pt
 
-  sampler_id: av_causal
+  sample_interval: 50
+  save_interval: 500
+
+  sampler_id: av_caching_one_step
   sampler_kwargs:
-    n_steps: 1
-    cfg_scale: 1.3
     window_length: 16
-    num_frames: 1
-    noise_prev: 0.2
-    only_return_generated: false
+    num_frames: 104
+    only_return_generated: true
 
   n_samples: 4
 
@@ -91,7 +81,16 @@ train:
   audio_vae_cfg_path: configs/owl_vaes/audio_ae_2.yml
   audio_vae_ckpt_path: /mnt/data/checkpoints/cache_for_wm/sf_v0/cod_audio.pt
 
+  teacher_cfg_path: configs/av_v5_8x8_sf.yml
+  teacher_ckpt_path: 8x8_125k_ema.pt
+  student_ckpt_path: 8x8_125k_ema.pt
+
+  update_ratio: 5
+  rollout_steps: 1
+  min_rollout_frames: 8
+  cfg_scale: 1.3
+
 wandb:
   name: shahbuland
   project: video_models
-  run_name: mfu_test
+  run_name: av_v5_8x8_sf_redux

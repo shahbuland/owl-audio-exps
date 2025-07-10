@@ -173,10 +173,10 @@ def collate_fn(batch):
     # batch is list of quadruples
     latents, mouses, buttons, audios = zip(*batch)
     
-    latents = torch.stack(latents)    # [b,n,c,h,w]
-    mouses = torch.stack(mouses)      # [b,n,2] 
-    buttons = torch.stack(buttons)    # [b,n,n_buttons]
-    audios = torch.stack(audios)      # [b,n,d]
+    latents = torch.stack(latents).bfloat16()    # [b,n,c,h,w]
+    mouses = torch.stack(mouses).bfloat16()      # [b,n,2] 
+    buttons = torch.stack(buttons).bfloat16()    # [b,n,n_buttons]
+    audios = torch.stack(audios).bfloat16()      # [b,n,d]
     
     return latents, audios, mouses, buttons
 
