@@ -13,7 +13,7 @@ import tarfile
 import io
 import time
 from botocore.config import Config
-from botocore.exceptions import ClientError, ConnectionClosedError, SSLError, ReadTimeoutError
+from botocore.exceptions import ClientError, ConnectionClosedError, SSLError, ReadTimeoutError, ResponseStreamingError
 
 class RandomizedQueue:
     def __init__(self):
@@ -31,7 +31,8 @@ class RandomizedQueue:
 
 class S3CoDLatentAudioDataset(IterableDataset):
     # Class-level semaphore to limit concurrent S3 requests across all instances
-    _s3_semaphore = threading.Semaphore(2)  # Max 2 concurrent S3 requests (reduced due to high latency)
+    # Use rank-based scaling: fewer concurrent requests per node
+    _s3_semaphore = None  # Will be initialized per rank
     
     def __init__(self, window_length=120, file_share_max=20, rank=0, world_size=1, 
                  bucket_name="cod-latent-depth-4x4",
@@ -45,6 +46,15 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.bucket_name = bucket_name
         self.prefix = prefix
 
+        # Initialize rank-based semaphore (allow more concurrent requests)
+        if S3CoDLatentAudioDataset._s3_semaphore is None:
+            S3CoDLatentAudioDataset._s3_semaphore = threading.Semaphore(8)  # 8 concurrent requests across all ranks
+        
+        # Stagger initialization to avoid thundering herd
+        stagger_delay = self.rank * 2.0 + random.uniform(0, 2.0)
+        print(f"[Rank {self.rank}] Staggering S3 init by {stagger_delay:.1f}s")
+        time.sleep(stagger_delay)
+
         # Queue parameters
         self.max_tars = 2
         self.max_data = 1000
@@ -53,13 +63,16 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.tar_queue = RandomizedQueue()
         self.data_queue = RandomizedQueue()
 
-        # Setup S3 client with enhanced configuration
+        # Setup S3 client with enhanced configuration for multi-node SSL
         config = Config(
-            retries={'max_attempts': 5, 'mode': 'adaptive'},
-            max_pool_connections=5,
-            connect_timeout=30,
-            read_timeout=120,  # Increased to 2 minutes
-            signature_version='s3v4'
+            retries={'max_attempts': 10, 'mode': 'adaptive'},
+            max_pool_connections=1,  # Single connection per rank
+            connect_timeout=60,
+            read_timeout=300,  # 5 minutes for very slow responses
+            signature_version='s3v4',
+            # SSL-specific optimizations
+            parameter_validation=False,
+            tcp_keepalive=True
         )
         
         self.s3_client = boto3.client(
@@ -95,7 +108,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                 if obj['Key'].endswith('.tar'):
                                     tars.append(obj['Key'])
                     return tars
-            except (ConnectionClosedError, SSLError, ClientError, ReadTimeoutError) as e:
+            except (ConnectionClosedError, SSLError, ClientError, ReadTimeoutError, ResponseStreamingError) as e:
                 if attempt < max_retries - 1:
                     print(f"Error listing tars (attempt {attempt + 1}/{max_retries}): {e}")
                     time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
@@ -111,20 +124,40 @@ class S3CoDLatentAudioDataset(IterableDataset):
                 max_retries = 3
                 retry_delay = 1
                 
+                print(f"[Rank {self.rank}] Attempting to download tar: {tar_path}")
+                
                 for attempt in range(max_retries):
                     try:
                         with self._s3_semaphore:
+                            print(f"[Rank {self.rank}] Starting download attempt {attempt + 1}")
+                            
+                            # Fast streaming with large chunks
                             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=tar_path)
-                            tar_data = response['Body'].read()
+                            print(f"[Rank {self.rank}] Got response, streaming data...")
+                            
+                            # Stream with large chunks for speed
+                            tar_data = b''
+                            content_length = response.get('ContentLength', 0)
+                            
+                            try:
+                                for chunk in response['Body'].iter_chunks(chunk_size=50*1024*1024*3):  # 150MB chunks
+                                    tar_data += chunk
+                                    
+                            except Exception as stream_e:
+                                print(f"[Rank {self.rank}] Streaming error: {stream_e}")
+                                raise stream_e
+                            
+                            
                             self.tar_queue.add(tar_data)
+                            print(f"[Rank {self.rank}] Added to queue successfully")
                             break  # Success, exit retry loop
-                    except (ConnectionClosedError, SSLError, ClientError, ReadTimeoutError) as e:
+                            
+                    except Exception as e:
+                        print(f"[Rank {self.rank}] Error downloading tar {tar_path} (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
                         if attempt < max_retries - 1:
-                            print(f"Error downloading tar {tar_path} (attempt {attempt + 1}/{max_retries}): {e}")
                             time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
                         else:
-                            print(f"Failed to download tar {tar_path} after {max_retries} attempts: {e}")
-                            # Skip this tar and continue
+                            print(f"[Rank {self.rank}] Failed to download tar {tar_path} after {max_retries} attempts, skipping")
                             break
             else:
                 time.sleep(1)

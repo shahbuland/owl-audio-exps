@@ -33,6 +33,8 @@ COPY requirements.txt .
 # PyTorch is already installed in the NGC base image, skip PyTorch installation
 
 # Install other requirements from requirements.txt using system python with uv
+# Force numpy downgrade to fix compatibility issues
+RUN uv pip install --system --break-system-packages numpy==1.21.1 --force-reinstall
 RUN uv pip install --system --break-system-packages -r requirements.txt
 
 # Final stage - runtime image
