@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies and Python 3.12 in single layer
+# Install system dependencies 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
@@ -32,9 +32,7 @@ COPY requirements.txt .
 
 # PyTorch is already installed in the NGC base image, skip PyTorch installation
 
-# Install other requirements from requirements.txt using system python with uv
-# Force numpy downgrade to fix compatibility issues
-RUN uv pip install --system --break-system-packages numpy==1.21.1 --force-reinstall
+# Install requirements from requirements.txt using system python with uv
 RUN uv pip install --system --break-system-packages -r requirements.txt
 
 # Final stage - runtime image
@@ -72,6 +70,9 @@ COPY . /app
 # Initialize git submodules if they exist and checkout specified branch
 RUN git submodule update --init --recursive || true && \
     git submodule foreach --recursive 'git checkout $branch || git checkout $sha1 || true'
+
+# Force reinstall numpy after submodules to ensure we keep our version
+RUN uv pip install --system --break-system-packages numpy==1.26.0 --force-reinstall
 
 # Copy the environment file (Do this last)
 COPY .env .
