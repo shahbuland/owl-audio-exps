@@ -12,6 +12,8 @@ import torch.distributed as dist
 import tarfile
 import io
 import time
+from botocore.config import Config
+from botocore.exceptions import ClientError, ConnectionClosedError, SSLError, ReadTimeoutError
 
 class RandomizedQueue:
     def __init__(self):
@@ -28,6 +30,9 @@ class RandomizedQueue:
         return self.items.pop(idx)
 
 class S3CoDLatentAudioDataset(IterableDataset):
+    # Class-level semaphore to limit concurrent S3 requests across all instances
+    _s3_semaphore = threading.Semaphore(2)  # Max 2 concurrent S3 requests (reduced due to high latency)
+    
     def __init__(self, window_length=120, file_share_max=20, rank=0, world_size=1, 
                  bucket_name="cod-latent-depth-4x4",
                  prefix="labelled"):
@@ -48,13 +53,22 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.tar_queue = RandomizedQueue()
         self.data_queue = RandomizedQueue()
 
-        # Setup S3 client
+        # Setup S3 client with enhanced configuration
+        config = Config(
+            retries={'max_attempts': 5, 'mode': 'adaptive'},
+            max_pool_connections=5,
+            connect_timeout=30,
+            read_timeout=120,  # Increased to 2 minutes
+            signature_version='s3v4'
+        )
+        
         self.s3_client = boto3.client(
             's3',
             endpoint_url=os.environ['AWS_ENDPOINT_URL_S3'],
             aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
             aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
             region_name=os.environ['AWS_REGION'],
+            config=config
         )
 
         # Get list of available tars
@@ -68,24 +82,50 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
     def list_tars(self, prefix):
         tars = []
-        paginator = self.s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    if obj['Key'].endswith('.tar'):
-                        tars.append(obj['Key'])
+        max_retries = 3
+        retry_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                with self._s3_semaphore:
+                    paginator = self.s3_client.get_paginator('list_objects_v2')
+                    for page in paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
+                        if 'Contents' in page:
+                            for obj in page['Contents']:
+                                if obj['Key'].endswith('.tar'):
+                                    tars.append(obj['Key'])
+                    return tars
+            except (ConnectionClosedError, SSLError, ClientError, ReadTimeoutError) as e:
+                if attempt < max_retries - 1:
+                    print(f"Error listing tars (attempt {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+                else:
+                    print(f"Failed to list tars after {max_retries} attempts: {e}")
+                    raise
         return tars
 
     def background_download_tars(self):
         while True:
             if len(self.tar_queue.items) < self.max_tars:
                 tar_path = random.choice(self.tars)
-                try:
-                    response = self.s3_client.get_object(Bucket=self.bucket_name, Key=tar_path)
-                    tar_data = response['Body'].read()
-                    self.tar_queue.add(tar_data)
-                except Exception as e:
-                    print(f"Error downloading tar {tar_path}: {e}")
+                max_retries = 3
+                retry_delay = 1
+                
+                for attempt in range(max_retries):
+                    try:
+                        with self._s3_semaphore:
+                            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=tar_path)
+                            tar_data = response['Body'].read()
+                            self.tar_queue.add(tar_data)
+                            break  # Success, exit retry loop
+                    except (ConnectionClosedError, SSLError, ClientError, ReadTimeoutError) as e:
+                        if attempt < max_retries - 1:
+                            print(f"Error downloading tar {tar_path} (attempt {attempt + 1}/{max_retries}): {e}")
+                            time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+                        else:
+                            print(f"Failed to download tar {tar_path} after {max_retries} attempts: {e}")
+                            # Skip this tar and continue
+                            break
             else:
                 time.sleep(1)
 
