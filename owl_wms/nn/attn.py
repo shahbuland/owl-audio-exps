@@ -47,8 +47,8 @@ class Attn(nn.Module):
         self.qk_norm = QKNorm(config.d_model // config.n_heads)
         self.layer_ind = None
 
-        #self.rope = FlatVideoRoPE(config)
-        self.rope = FrameRoPE(config)
+        self.rope = FlatVideoRoPE(config)
+        #self.rope = FrameRoPE(config)
 
         self.tokens_per_frame = config.tokens_per_frame
         self.causal = config.causal
