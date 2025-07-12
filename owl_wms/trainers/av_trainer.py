@@ -171,7 +171,7 @@ class AVRFTTrainer(BaseTrainer):
                     # Updates
                     if self.train_cfg.opt.lower() != "muon":
                         self.scaler.unscale_(self.opt)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
 
                     self.scaler.step(self.opt)
                     self.opt.zero_grad(set_to_none=True)
