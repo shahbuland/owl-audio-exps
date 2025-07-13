@@ -266,20 +266,26 @@ class SelfForceTrainer(BaseTrainer):
         self.model_cfg.causal = True
 
         # === init teacher ===
-        teacher_cfg_path = self.train_cfg.teacher_cfg_path
-        teacher_ckpt_path = self.train_cfg.teacher_ckpt_path
+        teacher_cfg_path = self.train_cfg.teacher_cfg
+        teacher_ckpt_path = self.train_cfg.teacher_ckpt
         teacher_cfg = Config.from_yaml(teacher_cfg_path).model
         teacher_ckpt = versatile_load(teacher_ckpt_path)
 
         self.teacher = get_model_cls(teacher_cfg.model_id)(teacher_cfg)
-        self.teacher.load_state_dict(teacher_ckpt)
+        try:
+            self.teacher.load_state_dict(teacher_ckpt)
+        except:
+            self.teacher.core.load_state_dict(teacher_ckpt)
     
         # === init student (and fake score fn) ===
-        student_ckpt_path = self.train_cfg.student_ckpt_path
+        student_ckpt_path = self.train_cfg.student_ckpt
         student_ckpt = versatile_load(student_ckpt_path)
 
         self.student = get_model_cls(self.model_cfg.model_id)(self.model_cfg)
-        self.student.load_state_dict(student_ckpt)
+        try:
+            self.student.load_state_dict(student_ckpt)
+        except:
+            self.student.core.load_state_dict(student_ckpt)
 
         self.critic = deepcopy(self.student)
 

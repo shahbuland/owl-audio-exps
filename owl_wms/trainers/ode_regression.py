@@ -6,23 +6,22 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import einops as eo
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 import wandb
 from ema_pytorch import EMA
-from torch.nn.parallel import DistributedDataParallel as DDP
-
-from diffusers import AutoencoderDC
 
 from ..data import get_loader
 from ..models import get_model_cls
 from ..muon import init_muon
-from ..schedulers import get_scheduler_cls
 from ..utils import Timer, freeze, unfreeze, versatile_load
-from ..utils.logging import LogHelper, to_wandb
+from ..utils.logging import LogHelper, to_wandb, to_wandb_av
 from .base import BaseTrainer
 from ..configs import Config
-from ..sampling import flow_sample
+from ..sampling import get_sampler_cls
 from ..sampling.schedulers import get_sd3_euler
+from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 
 class DistillODETrainer(BaseTrainer):
     """
@@ -76,6 +75,8 @@ class DistillODETrainer(BaseTrainer):
 
         freeze(self.decoder)
         freeze(self.audio_decoder)
+        self.decoder = self.decoder.bfloat16().to(self.device).eval()
+        self.audio_decoder = self.audio_decoder.bfloat16().to(self.device).eval()
 
     def load_teacher_into_student(self, student_model, teacher_state_dict, teacher_cfg, student_cfg):
         """
@@ -161,6 +162,11 @@ class DistillODETrainer(BaseTrainer):
         self.scaler.load_state_dict(save_dict['scaler'])
         self.total_step_counter = save_dict['steps']
 
+    def get_ema_core(self):
+        if self.world_size > 1:
+            return self.ema.ema_model.module
+        return self.ema.ema_model
+
     def train(self):
         torch.cuda.set_device(self.local_rank)
 
@@ -181,7 +187,7 @@ class DistillODETrainer(BaseTrainer):
             update_every=1
         )
 
-        # Optimizer and scheduler
+        # Optimizer
         if self.train_cfg.opt.lower() == "muon":
             self.opt = init_muon(self.student, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
         else:
@@ -201,6 +207,7 @@ class DistillODETrainer(BaseTrainer):
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
         sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.n_samples, **self.train_cfg.sample_data_kwargs)
         sample_loader = iter(sample_loader)
+        sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
         # Timer and logging
         timer = Timer()
@@ -214,8 +221,8 @@ class DistillODETrainer(BaseTrainer):
         local_step = 0
         input_shape = (
             self.model_cfg.channels,
-            self.model_cfg.sample_size[0],
-            self.model_cfg.sample_size[1],
+            self.model_cfg.sample_size,
+            self.model_cfg.sample_size,
         )
         input_shape_audio = (
             self.model_cfg.audio_channels,
@@ -232,8 +239,7 @@ class DistillODETrainer(BaseTrainer):
             """
             Sample using teacher 
             """
-            noisy_video = get_dummy(mouse)
-            noisy_audio = get_dummy_audio(mouse)
+            noisy_video, noisy_audio = get_dummy(mouse)
 
             dt_list = get_sd3_euler(n_steps)
             t = torch.ones(mouse.shape[0],mouse.shape[1], device = mouse.device, dtype = mouse.dtype)
@@ -246,12 +252,12 @@ class DistillODETrainer(BaseTrainer):
             video_outputs = []
             audio_outputs = []
 
-            cond_mask = torch.ones(mouse.shape[0], device = mouse.device, dtype = mouse.bool)
+            cond_mask = torch.ones(mouse.shape[0], device = mouse.device, dtype = torch.bool)
             uncond_mask = torch.zeros_like(cond_mask)
 
             for dt in dt_list:
-                pred_video_uncond, pred_audio_uncond = self.teacher_diff(noisy_video, noisy_audio, t, mouse, btn, cond_mask, has_controls=uncond_mask)
-                pred_video_cond, pred_audio_cond = self.teacher_diff(noisy_video, noisy_audio, t, mouse, btn, cond_mask, has_controls=cond_mask)
+                pred_video_uncond, pred_audio_uncond = self.teacher(noisy_video, noisy_audio, t, mouse, btn, has_controls=uncond_mask)
+                pred_video_cond, pred_audio_cond = self.teacher(noisy_video, noisy_audio, t, mouse, btn, has_controls=cond_mask)
 
                 pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
                 pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
@@ -278,7 +284,7 @@ class DistillODETrainer(BaseTrainer):
             ts = torch.cat(ts, dim=0)
 
             if subsample < 1.0:
-                inds = torch.randperm(inputs.shape[0])[:int(inputs.shape[0] * subsample)]
+                inds = torch.randperm(video_inputs.shape[0])[:int(video_inputs.shape[0] * subsample)]
                 video_inputs = video_inputs[inds]
                 audio_inputs = audio_inputs[inds]
                 video_outputs = video_outputs[inds]
@@ -306,8 +312,10 @@ class DistillODETrainer(BaseTrainer):
                     ts
                 ) = sample_with_teacher(batch_mouse, batch_btn, subsample=self.subsample)
 
-                preds = self.student(video_inputs, audio_inputs, mouse_inputs, btn_inputs, ts)
-                loss = F.mse_loss(preds, video_outputs) / accum_steps
+                preds_video, preds_audio = self.student(video_inputs, audio_inputs, ts, mouse_inputs, btn_inputs)
+                loss_video = F.mse_loss(preds_video, video_outputs) / self.accum_steps
+                loss_audio = F.mse_loss(preds_audio, audio_outputs) / self.accum_steps
+                loss = 0.5 * (loss_video + loss_audio)
 
             metrics.log('loss', loss)
             self.scaler.scale(loss).backward()
@@ -320,11 +328,7 @@ class DistillODETrainer(BaseTrainer):
 
                 self.scaler.step(self.opt)
                 self.opt.zero_grad(set_to_none=True)
-
                 self.scaler.update()
-
-                if self.scheduler is not None:
-                    self.scheduler.step()
                 self.ema.update()
 
                 # Logging and sampling
@@ -339,7 +343,7 @@ class DistillODETrainer(BaseTrainer):
                             vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
                             n_samples = self.train_cfg.n_samples
                             samples, audio, sample_mouse, sample_button = sampler(
-                                get_ema_core(),
+                                self.get_ema_core(),
                                 vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
                                 aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
                                 mouse_for_sample.bfloat16().cuda(),
@@ -350,11 +354,15 @@ class DistillODETrainer(BaseTrainer):
                                 self.train_cfg.audio_vae_scale
                             ) # -> [b,n,c,h,w]
                         if self.rank == 0:
-                            wandb_dict['samples'] = to_wandb(
-                                batch.detach().contiguous().bfloat16(),
-                                ema_rec.detach().contiguous().bfloat16(),
-                                gather=False
-                            )
+                            wandb_av_out = to_wandb_av(samples, audio, sample_mouse, sample_button)
+                            if len(wandb_av_out) == 3:  
+                                video, depth_gif, flow_gif = wandb_av_out
+                                wandb_dict['samples'] = video
+                                wandb_dict['depth_gif'] = depth_gif
+                                wandb_dict['flow_gif'] = flow_gif
+                            else:
+                                video = wandb_av_out
+                                wandb_dict['samples'] = video
 
                     if self.rank == 0:
                         wandb.log(wandb_dict)
