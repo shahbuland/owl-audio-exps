@@ -12,7 +12,7 @@ model:
   n_buttons: 11
   n_mouse_axes: 2
 
-  cfg_prob: 0.1
+  cfg_prob: 0.0
   n_frames: 16
 
   causal: true
@@ -35,8 +35,8 @@ train:
     prefix: depth-and-raw/labelled
     file_share_max: 50
 
-  target_batch_size: 64
-  batch_size: 8
+  target_batch_size: 224
+  batch_size: 14
 
   epochs: 200
 
@@ -47,7 +47,7 @@ train:
     weight_decay: 0.01
     eps: 1.0e-8
   d_opt_kwargs:
-    lr: 2.0e-6
+    lr: 4.0e-7
     betas: [0.0, 0.999]
     weight_decay: 0.01
     eps: 1.0e-8
@@ -58,7 +58,7 @@ train:
   output_path: /mnt/data/shahbuland/checkpoints/av_v2_s6_output
   resume_ckpt: null #checkpoints/av_v2/step_30000.pt
         
-  sample_interval: 200
+  sample_interval: 50
   save_interval: 500
 
   sampler_id: av_caching
@@ -82,12 +82,12 @@ train:
   audio_vae_cfg_path: configs/owl_vaes/audio_ae_2.yml
   audio_vae_ckpt_path: /mnt/data/checkpoints/cache_for_wm/sf_v0/cod_audio.pt
 
-  teacher_ckpt: checkpoints/av_v6_8x8_causal/step_115000.pt
+  teacher_ckpt: checkpoints/av_v6_8x8_causal/step_165000.pt
   teacher_cfg: configs/av_v5_8x8_weak.yml
   
-  student_ckpt: checkpoints/av_v6_8x8_causal/step_115000.pt
+  student_ckpt: checkpoints/av_v6_8x8_causal/step_165000.pt
 
-  min_rollout_frames: 8
+  min_rollout_frames: 16
   update_ratio: 5
   rollout_steps: 1
 
