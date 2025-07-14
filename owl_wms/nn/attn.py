@@ -16,7 +16,7 @@ def checkpoint(function, *args, **kwargs):
     kwargs.setdefault("use_reentrant", False)
     return torch_checkpoint(function, *args, **kwargs)
 
-def create_block_causal_mask(tokens, tokens_per_frame, device, dtype):
+def create_block_causal_mask(tokens, tokens_per_frame, device = 'cuda', dtype=torch.float32):
     frames = tokens // tokens_per_frame
     # Create base causal mask, nothing is masked
     mask = torch.zeros(tokens, tokens, device = device, dtype=dtype)
@@ -52,6 +52,11 @@ class Attn(nn.Module):
 
         self.tokens_per_frame = config.tokens_per_frame
         self.causal = config.causal
+        
+        self.mask = create_block_causal_mask(
+            self.tokens_per_frame*config.n_frames,
+            self.tokens_per_frame
+        )
     
     def forward(self, x, kv_cache = None):
         qkv = self.qkv(x)
@@ -62,11 +67,7 @@ class Attn(nn.Module):
         if not self.causal:
             mask = None
         else:
-            if kv_cache is not None and kv_cache.length_at(self.layer_ind) > 0:
-                n_tok_mask = kv_cache.length_at(self.layer_ind) + x.shape[1]
-            else:
-                n_tok_mask = x.shape[1]
-            mask = create_block_causal_mask(n_tok_mask, self.tokens_per_frame, device = x.device, dtype = x.dtype)
+            mask = self.mask.to(device=x.device, dtype=x.dtype)
             mask = mask.unsqueeze(0).repeat(x.shape[0], 1, 1)
             mask = mask.unsqueeze(1)
 
@@ -82,7 +83,7 @@ class Attn(nn.Module):
             if kv_cache.should_update:
                 kv_cache.update(new_k.clone(), new_v.clone(), self.layer_ind)
 
-            q,new_k = self.rope(q, new_k, kv_cache.offset)
+            q,new_k = self.rope(q, new_k)
 
             mask = mask[:,:,-n_q:,:] # Only new queries
             x = F.scaled_dot_product_attention(q, new_k, new_v, attn_mask = mask)

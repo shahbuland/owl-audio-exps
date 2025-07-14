@@ -45,7 +45,7 @@ class FlatVideoRoPE(nn.Module):
         )
 
     #@torch.compile(mode='max-autotune', dynamic=False, fullgraph=True)
-    def forward(self, q, k, offset = 0):
+    def forward(self, q, k):
         b,h,_,d = k.shape
 
         # q|k is [b,h,n_frames*tokens_per_frame,d]
@@ -78,13 +78,9 @@ class FlatVideoRoPE(nn.Module):
 
         # Check for shape match between cache and k. If fail, reset cache
         with torch.no_grad():
-            #vid_freqs = self.vid_freqs_cache[offset:offset+n]
-            #audio_freqs = self.audio_freqs_cache[offset:offset+n]
             vid_freqs = self.vid_freqs_cache[:n]
             audio_freqs = self.audio_freqs_cache[:n]
-            #vid_freqs = self.vid_freqs_cache[n-1].to(q.device,q.dtype)
-            #audio_freqs = self.audio_freqs_cache[n-1].to(q.device,q.dtype)
-
+            
         # Apply RoPE to video tokens
         q_video = apply_rotary_emb(vid_freqs[-n_q:].detach(), q_video)
         k_video = apply_rotary_emb(vid_freqs.detach(), k_video)

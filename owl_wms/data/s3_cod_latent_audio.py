@@ -36,7 +36,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
     
     def __init__(self, window_length=120, file_share_max=20, rank=0, world_size=1, 
                  bucket_name="cod-latent-depth-4x4",
-                 prefix="labelled"):
+                 prefix="labelled", verbose = False):
         super().__init__()
         
         self.window = window_length
@@ -45,6 +45,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.world_size = world_size
         self.bucket_name = bucket_name
         self.prefix = prefix
+        self.verbose = verbose
 
         # Initialize rank-based semaphore (allow more concurrent requests)
         if S3CoDLatentAudioDataset._s3_semaphore is None:
@@ -52,7 +53,8 @@ class S3CoDLatentAudioDataset(IterableDataset):
         
         # Stagger initialization to avoid thundering herd
         stagger_delay = self.rank * 2.0 + random.uniform(0, 2.0)
-        print(f"[Rank {self.rank}] Staggering S3 init by {stagger_delay:.1f}s")
+        if verbose:
+            print(f"[Rank {self.rank}] Staggering S3 init by {stagger_delay:.1f}s")
         time.sleep(stagger_delay)
 
         # Queue parameters
@@ -110,10 +112,12 @@ class S3CoDLatentAudioDataset(IterableDataset):
                     return tars
             except (ConnectionClosedError, SSLError, ClientError, ReadTimeoutError, ResponseStreamingError) as e:
                 if attempt < max_retries - 1:
-                    print(f"Error listing tars (attempt {attempt + 1}/{max_retries}): {e}")
+                    if self.verbose:
+                        print(f"Error listing tars (attempt {attempt + 1}/{max_retries}): {e}")
                     time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
                 else:
-                    print(f"Failed to list tars after {max_retries} attempts: {e}")
+                    if self.verbose:
+                        print(f"Failed to list tars after {max_retries} attempts: {e}")
                     raise
         return tars
 
@@ -124,16 +128,19 @@ class S3CoDLatentAudioDataset(IterableDataset):
                 max_retries = 3
                 retry_delay = 1
                 
-                print(f"[Rank {self.rank}] Attempting to download tar: {tar_path}")
+                if self.verbose:
+                    print(f"[Rank {self.rank}] Attempting to download tar: {tar_path}")
                 
                 for attempt in range(max_retries):
                     try:
                         with self._s3_semaphore:
-                            print(f"[Rank {self.rank}] Starting download attempt {attempt + 1}")
+                            if self.verbose:
+                                print(f"[Rank {self.rank}] Starting download attempt {attempt + 1}")
                             
                             # Fast streaming with large chunks
                             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=tar_path)
-                            print(f"[Rank {self.rank}] Got response, streaming data...")
+                            if self.verbose:
+                                print(f"[Rank {self.rank}] Got response, streaming data...")
                             
                             # Stream with large chunks for speed
                             tar_data = b''
@@ -144,20 +151,24 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                     tar_data += chunk
                                     
                             except Exception as stream_e:
-                                print(f"[Rank {self.rank}] Streaming error: {stream_e}")
+                                if self.verbose:
+                                    print(f"[Rank {self.rank}] Streaming error: {stream_e}")
                                 raise stream_e
                             
                             
                             self.tar_queue.add(tar_data)
-                            print(f"[Rank {self.rank}] Added to queue successfully")
+                            if self.verbose:
+                                print(f"[Rank {self.rank}] Added to queue successfully")
                             break  # Success, exit retry loop
                             
                     except Exception as e:
-                        print(f"[Rank {self.rank}] Error downloading tar {tar_path} (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
+                        if self.verbose:
+                            print(f"[Rank {self.rank}] Error downloading tar {tar_path} (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
                         if attempt < max_retries - 1:
                             time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
                         else:
-                            print(f"[Rank {self.rank}] Failed to download tar {tar_path} after {max_retries} attempts, skipping")
+                            if self.verbose:
+                                print(f"[Rank {self.rank}] Failed to download tar {tar_path} after {max_retries} attempts, skipping")
                             break
             else:
                 time.sleep(1)
