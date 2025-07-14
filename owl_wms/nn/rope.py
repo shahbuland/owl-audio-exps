@@ -16,7 +16,7 @@ class FlatVideoRoPE(nn.Module):
     """
     RoPE on video + audio assuming each frame flat'd to [n_frame_toks+n_audio_toks]
     """
-    def __init__(self, config):
+    def __init__(self, cfg):
         super().__init__()
         d_head = cfg.d_model // cfg.n_heads
         self.m = cfg.tokens_per_frame

@@ -11,29 +11,37 @@ from .modulation import AdaLN, Gate
 from .rope import FlatVideoRoPE, FrameRoPE
 
 torch.backends.cuda.enable_flash_sdp(enabled = True)
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask, BlockMask
+
+create_block_mask = torch.compile(create_block_mask, dynamic=True)
+flex_attention = torch.compile(flex_attention, dynamic=True)
+
 
 def checkpoint(function, *args, **kwargs):
     kwargs.setdefault("use_reentrant", False)
     return torch_checkpoint(function, *args, **kwargs)
 
-def create_block_causal_mask(tokens, tokens_per_frame, device = 'cuda', dtype=torch.float32):
-    frames = tokens // tokens_per_frame
-    # Create base causal mask, nothing is masked
-    mask = torch.zeros(tokens, tokens, device = device, dtype=dtype)
-    
-    # Allow attention within each frame and to previous frames, except last frame can't see first frame
-    for i in range(frames):
-        start = i * tokens_per_frame
-        end = (i + 1) * tokens_per_frame
-        
-        # Mask future frames
-        mask[start:end, end:] = float('-inf')
-        
-        # For last frame, also mask first frame
-        if i == frames - 1:
-            mask[start:end, :tokens_per_frame] = float('-inf')
-        
-    return mask
+
+def create_causal_block_mask(tokens_per_frame: int, n_new_tokens: int, n_cached_tokens: int, device: torch.device):
+    """
+    Build a full (total_tokens × total_tokens) BlockMask that:
+      - lets each token attend within its frame of size tokens_per_frame
+      - lets it attend to any earlier frame
+      - but in the final frame, no attention to frame 0
+    Row index q is interpreted as absolute position q+offset.
+    """
+    total_tokens = n_cached_tokens + n_new_tokens
+    n_frames = total_tokens // tokens_per_frame
+    frame = torch.arange(total_tokens, device=device) // tokens_per_frame
+
+    def mask_mod(b, h, q, k):
+        abs_q = q + n_cached_tokens
+        fq = frame[abs_q]
+        fk = frame[k]
+        return (fk <= fq) & ~((fq == n_frames - 1) & (fk == 0))
+
+    return create_block_mask(mask_mod, None, None, n_new_tokens, total_tokens)
+
 
 class Attn(nn.Module):
     def __init__(self, config : 'TransformerConfig'):
@@ -52,49 +60,37 @@ class Attn(nn.Module):
 
         self.tokens_per_frame = config.tokens_per_frame
         self.causal = config.causal
-        
-        self.mask = create_block_causal_mask(
-            self.tokens_per_frame*config.n_frames,
-            self.tokens_per_frame
-        )
-    
-    def forward(self, x, kv_cache = None):
+
+    @torch.compile
+    def forward(self, x, kv_cache=None):
+        B, L, _ = x.shape
+
         qkv = self.qkv(x)
         qkv = qkv.view(qkv.shape[0], qkv.shape[1], 3, self.n_heads, -1)
         q, k, v = qkv.permute(2, 0, 3, 1, 4)
-        q,k = self.qk_norm(q,k)
+        q, k = self.qk_norm(q, k)
+        q, k = q.type_as(v), k.type_as(v)
+
+        # prepend cache (if any) and record offset
+        offset = kv_cache.length_at(self.layer_ind) if kv_cache is not None else 0
+        if offset > 0:
+            old_k, old_v = kv_cache.get(self.layer_ind)
+            k = torch.cat([old_k, k], dim=2)
+            v = torch.cat([old_v, v], dim=2)
+            if kv_cache.should_update:
+                kv_cache.update(k.clone(), v.clone(), self.layer_ind)
+
+        q, k = self.rope(q, k, offset)
 
         if not self.causal:
-            mask = None
+            block_mask = None  # default: full unmasked attention
         else:
-            mask = self.mask.to(device=x.device, dtype=x.dtype)
-            mask = mask.unsqueeze(0).repeat(x.shape[0], 1, 1)
-            mask = mask.unsqueeze(1)
+            block_mask = create_causal_block_mask(self.tokens_per_frame, L, offset, device=x.device)
 
-        if kv_cache is not None:
-            old_k, old_v = kv_cache.get(self.layer_ind)
-            n_q = q.shape[-2]
+        attn_out = flex_attention(q, k, v, block_mask=block_mask)
+        attn_out = attn_out.permute(0, 2, 1, 3).contiguous().view(x.shape[0], L, -1)
 
-            len_k = old_k.shape[2]
-
-            new_k = torch.cat([old_k, k], dim = 2).contiguous()
-            new_v = torch.cat([old_v, v], dim = 2).contiguous()
-
-            if kv_cache.should_update:
-                kv_cache.update(new_k.clone(), new_v.clone(), self.layer_ind)
-
-            q,new_k = self.rope(q, new_k)
-
-            mask = mask[:,:,-n_q:,:] # Only new queries
-            x = F.scaled_dot_product_attention(q, new_k, new_v, attn_mask = mask)
-
-        else:
-            q,k = self.rope(q,k)
-            x = F.scaled_dot_product_attention(q,k,v, attn_mask = mask)
-
-        x = x.permute(0, 2, 1, 3).contiguous().view(x.shape[0], x.shape[2], -1)
-        x = self.out(x)
-        return x
+        return self.out(x)
 
 class DiTBlock(nn.Module):
     def __init__(self, config):
@@ -116,7 +112,7 @@ class DiTBlock(nn.Module):
         x = self.attn(x, kv_cache)
         x = self.gate1(x, cond)
         x = res1 + x
-        
+
         res2 = x.clone()
         x = self.adaln2(x, cond)
         x = self.mlp(x)
@@ -178,12 +174,12 @@ class UViT(nn.Module):
             # Get corresponding early block output
             early_idx = n_blocks - 1 - i
             early_feat = early_features[early_idx]
-            
+
             # Concatenate early and current features
             skip_idx = i - (mid_idx + 1)
             x = torch.cat([x, early_feat], dim=-1)
             x = self.skip_projs[skip_idx](x)
-            
+
             x = self.blocks[i](x, cond, kv_cache)
 
         return x
@@ -206,7 +202,7 @@ class FinalLayer(nn.Module):
         return x
 
 def test_attn_mask():
-    total_tokens = 64 
+    total_tokens = 64
     tokens_per_frame = 8
 
     # Block causal mask
@@ -231,7 +227,7 @@ def test_kv_cache():
     # Create test configs
     config = TransformerConfig(
         n_layers=2,
-        n_heads=8, 
+        n_heads=8,
         d_model=64,
         tokens_per_frame=8
     )
@@ -253,7 +249,7 @@ def test_kv_cache():
 
     # First forward pass should populate cache
     out1 = model(x, cond, cache)
-    
+
     # Second pass should use cached values
     cache.disable_cache_updates()
     out2 = model(x, cond, cache)
