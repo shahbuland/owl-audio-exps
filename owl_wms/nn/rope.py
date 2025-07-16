@@ -24,8 +24,12 @@ class FlatVideoRoPE(nn.Module):
         assert self.m == self.p**2 + 1
 
         # pre-compute cos / sin tables
-        vid_ang = RotaryEmbedding(d_head // 4, freqs_for="pixel", max_freq=256)\
-            .get_axial_freqs(config.n_frames, self.p, self.p)
+        # Using half dimension since we only need 1D rotation
+        vid_ang = RotaryEmbedding(
+            d_head // 4,  # Using half dimension since we only need 1D rotation
+            freqs_for="pixel",
+            max_freq=256
+        ).get_axial_freqs(config.n_frames, self.p, self.p)
         aud_ang = RotaryEmbedding(d_head // 2)\
             .get_axial_freqs(config.n_frames)
 
@@ -51,21 +55,24 @@ class FlatVideoRoPE(nn.Module):
         b, h, tq, d = q.shape
         nk, nq = k.size(2) // self.m, tq // self.m
 
+        # q|k is [b,h,n_frames*tokens_per_frame,d]
         q = q.view(b, h, nq, self.m, d)
         k = k.view(b, h, nk, self.m, d)
 
         # split video / audio
+        # video q/k: b h n_frames*p^2 d
+        # audio q/k: b h n_frames*1 d
         qv, qa = q[..., :self.p**2, :], q[..., self.p**2, :]
         kv, ka = k[..., :self.p**2, :], k[..., self.p**2, :]
 
-        # HxH pixel video RoPE on q/k
+        # PxP pixel video RoPE on q/k
         q_grid_shape = b, h, nq, self.p, self.p, d
         kv_grid_shape = b, h, nk, self.p, self.p, d
         qv = self._rot(qv.view(*q_grid_shape), self.vcos, self.vsin).reshape_as(qv)
         kv = self._rot(kv.view(*kv_grid_shape), self.vcos, self.vsin).reshape_as(kv)
 
         # audio RoPE on q/k
-        qa = self._rot(qa, self.acos, self.asin).unsqueeze(-2)
+        qa = self._rot(qa, self.acos, self.asin).unsqueeze(-2)  # bhnd
         ka = self._rot(ka, self.acos, self.asin).unsqueeze(-2)
 
         # Recombine
