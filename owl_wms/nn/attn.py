@@ -197,7 +197,7 @@ class UViT(nn.Module):
             x = torch.cat([x, early_feat], dim=-1)
             x = self.skip_projs[skip_idx](x)
 
-            x = self.blocks[i](x, cond, kv_cache)
+            x = self.blocks[i](x, cond, block_mask, kv_cache)
 
         return x
 
