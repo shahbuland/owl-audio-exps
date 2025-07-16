@@ -24,7 +24,6 @@ class FlatVideoRoPE(nn.Module):
         assert self.m == self.p**2 + 1
 
         # pre-compute cos / sin tables
-        # Using half dimension since we only need 1D rotation
         vid_ang = RotaryEmbedding(
             d_head // 4,  # Using half dimension since we only need 1D rotation
             freqs_for="pixel",
