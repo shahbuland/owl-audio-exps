@@ -1,4 +1,5 @@
 import torch
+import einops
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
@@ -65,8 +66,7 @@ class Attn(nn.Module):
         B, L, _ = x.shape
 
         qkv = self.qkv(x)
-        qkv = qkv.view(qkv.shape[0], qkv.shape[1], 3, self.n_heads, -1)
-        q, k, v = qkv.permute(2, 0, 3, 1, 4)
+        q, k, v = einops.rearrange(qkv, "b t (three h d) -> three b h t d", three=3, h=self.n_heads)
         q, k = self.qk_norm(q, k)
         q, k = q.type_as(v), k.type_as(v)
 
