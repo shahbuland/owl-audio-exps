@@ -3,24 +3,33 @@ from .cfg import CFGSampler
 from .window import WindowCFGSampler
 
 def get_sampler_cls(sampler_id):
-    if sampler_id == "simple":
-        return SimpleSampler
-    elif sampler_id == "cfg":
-        return CFGSampler
-    elif sampler_id == "window":
-        return WindowCFGSampler
-    elif sampler_id == "av_window":
+    if sampler_id == "av_window":
+        """
+        Most basic Audio+Video sampler with CFG
+        """
         from .av_window import AVWindowSampler
         return AVWindowSampler
     elif sampler_id == "av_caching":
+        """
+        Audio+Video sampler with strong caching, doesn't renoise previous frames. Caches clean frames. Will not work without special algorithm.
+        """
         from .av_caching import AVCachingSampler
         return AVCachingSampler
     elif sampler_id == "av_causal":
+        """
+        Audio+Video sampler with causal sampling, caches noisy history on first diffusion step.
+        """
         from .av_window import CausalAVWindowSampler
         return CausalAVWindowSampler
     elif sampler_id == "av_causal_no_cfg":
+        """
+        Identical to av causal but skips cfg (ideal for distilled models)
+        """
         from .av_window import CausalAVWindowSamplerNoCFG
         return CausalAVWindowSamplerNoCFG
     elif sampler_id == "av_caching_one_step":
+        """
+        Identical to av_caching but with a hard assumption for one step to simplify
+        """
         from .av_caching import AVCachingOneStepSampler
         return AVCachingOneStepSampler
