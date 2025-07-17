@@ -79,44 +79,36 @@ def to_wandb(x, batch_mouse, batch_btn, gather = False, max_samples = 8):
 
     return wandb.Video(x, format='gif',fps=60)
 
-@torch.no_grad()
-def _to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples = 8):
-    # x is [b,n,c,h,w]
-    # audio is [b,n,2]
+def to_wandb_gif(x, max_samples = 4):
     x = x.clamp(-1, 1)
+    x = (x + 1) * 127.5
+    x = x.to(torch.uint8)
     x = x[:max_samples]
-    audio = audio[:max_samples]
-
-    if dist.is_initialized() and gather:
-        gathered_x = [None for _ in range(dist.get_world_size())]
-        gathered_audio = [None for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_x, x)
-        dist.all_gather(gathered_audio, audio)
-        x = torch.cat(gathered_x, dim=0)
-        audio = torch.cat(gathered_audio, dim=0)
-
-    # Get labels on frames
-    x = draw_frames(x, batch_mouse, batch_btn) # -> [b,n,c,h,w] [0,255] uint8 np
+    x = eo.rearrange(x, 'b n c h w -> n c h (b w)' )
+    if x.shape[1] == 1:
+        x = x.repeat(1, 3, 1, 1)
     
-    # Convert audio to numpy float32 [-1,1]
-    audio = audio.cpu().float().numpy()
-
-    # Create grid of videos like in to_wandb
-    if max_samples == 8:
-        x = eo.rearrange(x, '(r c) n d h w -> n d (r h) (c w)', r = 2, c = 4)
-
-    # Create video and audio objects
-    video = wandb.Video(x, format='gif', fps=60)
-    audio_samples = [wandb.Audio(audio[i], sample_rate=44100) for i in range(len(audio))]
-
-    return video, audio_samples
+    return wandb.Video(x, format='gif', fps=60)
 
 @torch.no_grad()
-def to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples = 8):
+def to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples = 4):
     # x is [b,n,c,h,w]
     # audio is [b,n,2]
     x = x.clamp(-1, 1)
-    x = x[:max_samples]
+    x = x[:max_samples].cpu().float()
+    
+    if False: #x.shape[2] > 3:
+        depth = x[:,:,3:4]
+        flow = x[:,:,4:7]
+        x = x[:,:,:3]
+
+        depth_gif = to_wandb_gif(depth)
+        flow_gif = to_wandb_gif(flow)
+
+        feat = True
+    else:
+        feat = False
+
     audio = audio[:max_samples].cpu().float().detach().numpy()
 
     if dist.is_initialized() and gather:
@@ -139,7 +131,10 @@ def to_wandb_av(x, audio, batch_mouse, batch_btn, gather = False, max_samples = 
     for i, path in enumerate(paths):
         write_video_with_audio(path, x[i], audio[i])
 
-    return [wandb.Video(path, format='mp4') for path in paths]
+    if feat:
+        return [wandb.Video(path, format='mp4') for path in paths], depth_gif, flow_gif
+    else:
+        return [wandb.Video(path, format='mp4') for path in paths]
 
 def write_video_with_audio(path, vid, audio, fps=60,audio_fps=44100):
     """

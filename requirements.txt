@@ -1,7 +1,8 @@
+numpy==1.26.0
 opencv-python
 wandb
 einops
-rotary-embedding-torch
+rotary-embedding-torch>=0.8.8
 ema-pytorch
 omegaconf
 diffusers
@@ -10,3 +11,15 @@ boto3
 python-dotenv
 wandb[media]
 moviepy==1.0.3
+fvcore
+pynvml
+vector-quantize-pytorch==1.22.17
+git+https://github.com/shahbuland/PerceptualSimilarity
+torchmetrics
+ray
+datasets
+huggingface-hub
+alias-free-torch
+git+https://github.com/sypsyp97/convnext_perceptual_loss
+wandb[media]
+torchtyping
