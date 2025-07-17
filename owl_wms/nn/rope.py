@@ -35,10 +35,10 @@ class FlatVideoRoPE(nn.Module):
         self.cos = nn.Buffer(cos.contiguous(), persistent=False)
         self.sin = nn.Buffer(sin.contiguous(), persistent=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
         """x is either q or k. Shaped as [B, H, n_frames*tokens_per_frame, Dh]"""
         assert self.cos.dtype == torch.float32
-        cos, sin = self.cos[..., :x.size(2), :], self.sin[..., :x.size(2), :]
+        cos, sin = self.cos[..., offset:x.size(2) + offset, :], self.sin[..., offset:x.size(2) + offset, :]
         x0, x1 = x.float().unfold(-1, 2, 2).unbind(-1)
         y0 = x0 * cos - x1 * sin
         y1 = x1 * cos + x0 * sin
