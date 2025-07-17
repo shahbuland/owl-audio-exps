@@ -3,18 +3,63 @@ Basic world models
 
 ## Training
 
-### Single Node Setup
+### Deploy Training Codebase and Train on SkyPilot
 
+Setup SkyPilot
 ```bash
-git clone https://github.com/wayfarer-labs/owl-wms
+# Install SkyPilot
+python3 -m pip install -U skypilot
+
+# Authenticate
+sky api login -e https://owlskypilot:<password>@cluster.openworldlabs.ai
+```
+
+Create Docker Image for your Current Codebase
+
+Ensure you've configured your Docker Registry settings first. See "Docker Build & Deploy (For multinode training)"
+```bash
+# dockerizes and sets the $IMAGE_REF environment variable used by SkyPilot
+./build_and_push.sh
+```
+
+Launch your Trainer
+```bash
+export EXPERIMENT_NAME=new-attention-pattern-v2
+export TRAIN_CONFIG=skypilot/config.yaml
+
+# Provision Single Node
+sky launch --infra kubernetes --gpus H200:8 --num-nodes 1 --name $EXPERIMENT_NAME $TRAIN_CONFIG
+
+# **OR** Provision Multiple Nodes
+sky launch --infra kubernetes --gpus H200:8 --num-nodes 2 --name $EXPERIMENT_NAME $TRAIN_CONFIG
+```
+
+SkyPilot Basic Commands
+```bash
+# Launch multi-node training on SkyPilot
+sky launch skypilot/config.yaml
+
+# Check job status
+sky status
+
+# View logs
+sky logs <cluster_name>
+```
+
+
+### Train On Other Hosts
+
+Setup the model / trainer / requirements
+```bash
+export REPO=https://github.com/wayfarer-labs/owl-wms
+export EXPERIMENT_COMMIT=20bb0973336ab8696ad60e26bf1a7d5004191c70
+
+git clone --recursive -j8 $REPO
 cd owl-wms
+git fetch && git checkout $EXPERIMENT_COMMIT
 pip install -r requirements.txt
-git submodule init
-git submodule update
-cd owl-vaes
-git switch main
-pip install -r requirements.txt
-cd ..
+pip install -r owl-vaes/requirements.txt
+
 # Configure WandB
 wandb login
 ```
@@ -26,18 +71,6 @@ python train.py --config_path configs/basic.yml
 
 # Multi-GPU (single node)
 torchrun --nproc_per_node=8 train.py --config_path configs/basic.yml
-```
-
-### Multi-Node Training
-
-For multi-node distributed training:
-```bash
-torchrun --nproc_per_node=8 --nodes=2 train.py --config_path configs/av_v5_8x8_weak.yml
-```
-
-Or with SkyPilot:
-```bash
-sky launch --infra kubernetes --gpus H200:8 --num-nodes 2 --name <label> skypilot/config.yaml
 ```
 
 ## Docker Build & Deploy (For multinode training)
@@ -56,7 +89,7 @@ sky launch --infra kubernetes --gpus H200:8 --num-nodes 2 --name <label> skypilo
    REPOSITORY=your-repository
    IMAGE_NAME=your-image-name
    DEFAULT_TAG=latest
-   
+
    # Local build configuration
    LOCAL_REGISTRY=us-central1-docker.pkg.dev
    LOCAL_PROJECT=your-local-project
@@ -102,19 +135,3 @@ The script will:
    ```
 
 2. Make sure you set your Project ID for google cloud.
-
-### Launch Training
-```bash
-# Build and push your container
-./build_and_push.sh
-
-# Launch multi-node training on SkyPilot
-sky launch skypilot/config.yaml
-
-# Check job status
-sky status
-
-# View logs
-sky logs <cluster_name>
-```
-
