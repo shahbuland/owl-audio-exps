@@ -141,6 +141,20 @@ class DiT(nn.Module):
 
         return x
 
+class SkipConnection(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        self.norm = AdaLN(config.d_model)
+        self.proj = nn.Linear(config.d_model, config.d_model)
+
+    def forward(self, x, prev, cond):
+        x = x + prev
+        x = self.norm(x, cond)
+        x = self.proj(x)
+
+        return x
+
 class UViT(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -156,7 +170,7 @@ class UViT(nn.Module):
         n_skip_connections = config.n_layers // 2
         skip_projs = []
         for _ in range(n_skip_connections):
-            skip_projs.append(nn.Linear(config.d_model * 2, config.d_model))
+            skip_projs.append(SkipConnection(config))
         self.skip_projs = nn.ModuleList(skip_projs)
 
     def forward(self, x, cond, kv_cache = None):
@@ -179,11 +193,11 @@ class UViT(nn.Module):
             early_idx = n_blocks - 1 - i
             early_feat = early_features[early_idx]
             
-            # Concatenate early and current features
+            # Skip connection
             skip_idx = i - (mid_idx + 1)
-            x = torch.cat([x, early_feat], dim=-1)
-            x = self.skip_projs[skip_idx](x)
-            
+            x = self.skip_projs[skip_idx](x, early_feat, cond)
+
+            # Block
             x = self.blocks[i](x, cond, kv_cache)
 
         return x
