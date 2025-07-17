@@ -27,8 +27,8 @@ def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, n_cached_toke
     # Build n_tokens X n_tokens BlockMask which is causal and disallows wrapping
     assert 0 <= n_cached_tokens < n_tokens, "kv cache cannot exceept total tokens"
 
-    frame_id = torch.arange(n_tokens, device=device, dtype=torch.int32) // tokens_per_frame
-    n_frames = int(torch.div(n_tokens, tokens_per_frame, rounding_mode="floor"))
+    frame_id = torch.arange(n_tokens, device=device, dtype=torch.int32) // max(tokens_per_frame, 1)
+    n_frames = n_tokens // tokens_per_frame
 
     def mask_mod(b, h, q, k):
         abs_q = q + n_cached_tokens
