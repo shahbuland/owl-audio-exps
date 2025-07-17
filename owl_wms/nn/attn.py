@@ -70,16 +70,20 @@ class Attn(nn.Module):
         q, k = self.qk_norm(q, k)
         q, k = q.type_as(v), k.type_as(v)
 
-        # prepend cache (if any) and record offset
+        # rotate new queries and keys
         offset = kv_cache.length_at(self.layer_ind) if kv_cache is not None else 0
+        q = self.rope(q, offset=offset)
+        k = self.rope(k, offset=offset)
+
+        # prepend cached values
         if offset > 0:
             old_k, old_v = kv_cache.get(self.layer_ind)
             k = torch.cat([old_k, k], dim=2)
             v = torch.cat([old_v, v], dim=2)
-            if kv_cache.should_update:
-                kv_cache.update(k.clone(), v.clone(), self.layer_ind)
 
-        q, k = self.rope(q, offset=offset), self.rope(k)
+        # update cache
+        if kv_cache is not None and kv_cache.should_update:
+            kv_cache.update(k.clone(), v.clone(), self.layer_ind)
 
         attn_out = flex_attention(q, k, v, block_mask=block_mask)
         attn_out = attn_out.permute(0, 2, 1, 3).contiguous().view(x.shape[0], L, -1)

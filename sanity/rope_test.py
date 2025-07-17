@@ -1,8 +1,6 @@
 from owl_wms.nn.rope import FlatVideoRoPE, FlatVideoRoPE_v2
 from owl_wms.configs import TransformerConfig
 import torch
-from torch import nn
-import torch.nn.functional as F
 import time
 
 
