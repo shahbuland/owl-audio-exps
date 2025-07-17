@@ -1,114 +1,49 @@
 """
-Variants of RoPE were becoming heavy for embeddings so 
+Variants of RoPE were becoming heavy for embeddings so
 I made a unique script for all of them here
 """
 
-from rotary_embedding_torch import (
-    RotaryEmbedding,
-    apply_rotary_emb
-)
+from rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
 import torch
 from torch import nn
-import time
+
 
 class FlatVideoRoPE(nn.Module):
     """
     RoPE on video + audio assuming each frame flat'd to [n_frame_toks+n_audio_toks]
+    Rotate non-pad portion of feature-dims of q/k. Video 1/4th padded, audio 1/2 padded
     """
     def __init__(self, config):
         super().__init__()
+        d_head = config.d_model // config.n_heads
+        p = config.sample_size  # video is PxP pixels
 
+        # Video freqs. Rot features: (L, P, P, <pad>)
+        vid_freqs = RotaryEmbedding(d_head // 4, freqs_for="pixel", max_freq=256)\
+            .get_axial_freqs(config.n_frames, p, p, 1, offsets=(0, 0, 0, 1))\
+            .view(config.n_frames, p**2, -1)
 
-        dim_head = config.d_model // config.n_heads
-        self.pos_emb_video = RotaryEmbedding(
-            dim = dim_head//4, # Using half dimension since we only need 1D rotation
-            freqs_for='pixel',
-            max_freq=256
-        )
-        self.pos_emb_audio = RotaryEmbedding(
-            dim = dim_head//2
-        )
+        # Audio freqs. Rot features: (L, <pad>)
+        aud_freqs = RotaryEmbedding(d_head // 2)\
+            .get_axial_freqs(config.n_frames, 1, offsets=(0, 1))\
+            .view(config.n_frames, 1, -1)
 
-        self.m = config.tokens_per_frame
-        self.p = config.sample_size
-        self.p2 = self.p**2
+        # unified video / audio freqs. Shape: [n_frames, P^2 + 1, H]
+        freqs = torch.cat([vid_freqs, aud_freqs], dim=1).flatten(0, 1)
 
-        self.register_buffer(
-            "vid_freqs_cache",
-            self.pos_emb_video.get_axial_freqs(config.n_frames, self.p, self.p),
-            persistent=False
-        )
-        self.register_buffer(
-            "audio_freqs_cache",
-            self.pos_emb_audio.get_axial_freqs(config.n_frames),
-            persistent=False
-        )
+        cos, sin = freqs.cos()[..., ::2], freqs.sin()[..., ::2]  # subsampling
+        self.cos = nn.Buffer(cos.contiguous(), persistent=False)
+        self.sin = nn.Buffer(sin.contiguous(), persistent=False)
 
-    #@torch.compile(mode='max-autotune', dynamic=False, fullgraph=True)
-    def forward(self, q, k):
-        b,h,_,d = k.shape
+    def forward(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
+        """x is either q or k. Shaped as [B, H, n_frames*tokens_per_frame, Dh]"""
+        assert self.cos.dtype == torch.float32
+        cos, sin = self.cos[..., offset:x.size(2) + offset, :], self.sin[..., offset:x.size(2) + offset, :]
+        x0, x1 = x.float().unfold(-1, 2, 2).unbind(-1)
+        y0 = x0 * cos - x1 * sin
+        y1 = x1 * cos + x0 * sin
+        return torch.cat((y0, y1), dim=-1).type_as(x)
 
-        # q|k is [b,h,n_frames*tokens_per_frame,d]
-        n = k.shape[2]//self.m  # Number of frames
-        n_q = q.shape[2]//self.m
-        m = self.m             # Tokens per frame
-
-        # Reshape to [b,h,n,m,d]
-        q = q.view(q.shape[0], q.shape[1], n_q, m, q.shape[3])
-        k = k.view(k.shape[0], k.shape[1], n, m, k.shape[3])
-
-        # Split out the video and audio
-        # bhnmd-> bhn(16)d, bhnd
-        q_video = q[:,:,:,:self.p2]
-        q_video = q_video.view(
-            b,
-            h,
-            n_q, self.p, self.p,
-            d
-        ) # b h n_q p p d
-        k_video = k[:,:,:,:self.p2]
-        k_video = k_video.view(
-            b,
-            h,
-            n, self.p, self.p,
-            d
-        ) # b h n_q p p d
-        q_audio = q[:,:,:,-1]
-        k_audio = k[:,:,:,-1] # bhnd
-
-        # Check for shape match between cache and k. If fail, reset cache
-        with torch.no_grad():
-            vid_freqs = self.vid_freqs_cache[:n]
-            audio_freqs = self.audio_freqs_cache[:n]
-            
-        # Apply RoPE to video tokens
-        q_video = apply_rotary_emb(vid_freqs[-n_q:].detach(), q_video)
-        k_video = apply_rotary_emb(vid_freqs.detach(), k_video)
-
-        # Apply RoPE to audio tokens
-        q_audio = apply_rotary_emb(audio_freqs[-n_q:].detach(), q_audio)
-        k_audio = apply_rotary_emb(audio_freqs.detach(), k_audio)
-
-        q_video = q_video.reshape(
-            b,
-            h,
-            n_q, self.p2, 
-            d
-        ) # bhn(16)d
-        q = torch.cat([q_video, q_audio.unsqueeze(-2)], dim = -2)
-
-        k_video = k_video.reshape(
-            b,
-            h,
-            n, self.p2, 
-            d
-        )
-        k = torch.cat([k_video, k_audio.unsqueeze(-2)], dim = -2)
-        
-        q = q.view(b,h,n_q*m,d)
-        k = k.view(b,h,n*m,d)
-
-        return q, k
 
 class FrameRoPE(nn.Module):
     """
@@ -134,7 +69,7 @@ class FrameRoPE(nn.Module):
             pos_emb.get_axial_freqs(config.n_frames, self.p+1, self.p+1),
             persistent=False
         )
-    
+
     def forward(self, q, k, offset=0):
         b,h,_,d = k.shape
 
@@ -170,7 +105,7 @@ class FrameRoPE(nn.Module):
         with torch.no_grad():
             right_pad = torch.zeros(b, h, n, self.p, 1, d, device=k.device, dtype=k.dtype)
             bottom_pad = torch.zeros(b, h, n, 1, self.p+1, d, device=k.device, dtype=k.dtype)
-        
+
         q_video = torch.cat([q_video, right_pad[:,:,:n_q]], dim = -2)
         q_video = torch.cat([q_video, bottom_pad[:,:,:n_q]], dim = -3)
         k_video = torch.cat([k_video, right_pad], dim = -2)
@@ -195,7 +130,7 @@ class FrameRoPE(nn.Module):
         q_video = q_video.reshape(
             b,
             h,
-            n_q, self.p2, 
+            n_q, self.p2,
             d
         ) # bhn(16)d
         q = torch.cat([q_video, q_audio.unsqueeze(-2)], dim = -2)
@@ -203,60 +138,12 @@ class FrameRoPE(nn.Module):
         k_video = k_video.reshape(
             b,
             h,
-            n, self.p2, 
+            n, self.p2,
             d
         )
         k = torch.cat([k_video, k_audio.unsqueeze(-2)], dim = -2)
-        
+
         q = q.view(b,h,n_q*m,d)
         k = k.view(b,h,n*m,d)
 
         return q, k
-        
-def test_rope_speed():
-    """
-    Test the speed of RoPE implementation
-    """
-    from ..configs import TransformerConfig
-    import time
-    
-    # Create test configs matching AV model
-    config = TransformerConfig(
-        n_heads=24,
-        d_model=1536,
-        tokens_per_frame=17,
-        sample_size=4,
-        n_frames = 60
-    )
-
-    # Create model and inputs
-    rope = FlatVideoRoPE(config).cuda()
-    
-    batch_size = 32
-    seq_len = 60 * config.tokens_per_frame # 60 frames
-    d_head = config.d_model // config.n_heads
-    
-    q = torch.randn(batch_size, config.n_heads, seq_len, d_head).cuda()
-    k = torch.randn(batch_size, config.n_heads, seq_len, d_head).cuda()
-
-    # Warmup
-    for _ in range(3):
-        rope(q[:1], k[:1])
-    torch.cuda.synchronize()
-
-    # Benchmark
-    n_trials = 100
-    start = time.time()
-    for _ in range(n_trials):
-        rope(q, k)
-    torch.cuda.synchronize()
-    end = time.time()
-
-    avg_time = (end - start) / n_trials * 1000 # Convert to ms
-    print(f"Average RoPE time: {avg_time:.2f}ms")
-    print(f"Batch size: {batch_size}, Sequence length: {seq_len}")
-    print(f"Heads: {config.n_heads}, Head dim: {d_head}")
-
-if __name__ == "__main__":
-    test_rope_speed()
-

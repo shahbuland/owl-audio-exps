@@ -55,7 +55,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Python is already configured in the NGC base image
+# Final stage: For torch compile, ensure we are using correct python and have python-dev
+RUN apt remove --purge python3.10 python3.10-* && apt autoremove --purge
+RUN apt-get update && apt-get install -y build-essential python3.12-dev
+RUN uv pip install --system --break-system-packages --no-cache-dir --upgrade torch
 
 # Copy installed packages from builder stage
 COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
