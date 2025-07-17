@@ -216,7 +216,6 @@ class UViT(nn.Module):
 
             # Block
             x = self.blocks[i](x, cond, block_mask, kv_cache)
-
         return x
 
 # === VIT Specific Layers ===
