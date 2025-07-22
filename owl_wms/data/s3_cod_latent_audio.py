@@ -279,7 +279,7 @@ def get_loader(batch_size, **data_kwargs):
         collate_fn=collate_fn,
         num_workers=min(world_size * 2, os.cpu_count() // 2),
         pin_memory=True,
-        prefetch_factor=4 * world_size,
+        prefetch_factor=4,  # prefetch to mitigate slow batch loads
     )
 
 if __name__ == "__main__":
