@@ -273,11 +273,12 @@ def get_loader(batch_size, **data_kwargs):
         world_size = 1
 
     ds = S3CoDLatentAudioDataset(rank=rank, world_size=world_size, **data_kwargs)
+    print("world size", world_size, min(world_size, os.cpu_count() // 2))
     return DataLoader(
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        #num_workers=min(world_size, os.cpu_count() // 2),
+        num_workers=max(min(world_size, os.cpu_count() // 2), 4),
         prefetch_factor=4,  # prefetch to mitigate slow batch loads
     )
 
