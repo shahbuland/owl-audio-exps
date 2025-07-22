@@ -273,11 +273,18 @@ def get_loader(batch_size, **data_kwargs):
         world_size = 1
 
     ds = S3CoDLatentAudioDataset(rank=rank, world_size=world_size, **data_kwargs)
-    return DataLoader(ds, batch_size=batch_size, collate_fn=collate_fn)
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        collate_fn=collate_fn,
+        num_workers=min(world_size * 2, os.cpu_count() // 2),
+        pin_memory=True,
+        prefetch_factor=4 * world_size,
+    )
 
 if __name__ == "__main__":
     import time
-    loader = get_loader(16, 
+    loader = get_loader(16,
                        window_length=16,
                        bucket_name="cod-data-latent-360x640to4x4",
                        prefix="feats/unlabelled",
