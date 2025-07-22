@@ -78,19 +78,14 @@ class AVRoPE(nn.Module):
         self.cos = nn.Buffer(cos.contiguous(), persistent=False)
         self.sin = nn.Buffer(sin.contiguous(), persistent=False)
 
-    def forward(self, *xs, offset: int = 0):
-        # xs: tensors [B, H, T_i, Dh]; concat first, split back at end
-        lens = [x.size(2) for x in xs]  # [B, H, T, Dh], T0 -> Y
-        x = torch.cat(xs, dim=2)
+    def forward(self, x0, x1, offset: int = 0):
+        size0, size1 = x0.size(2), x1.size(2)  # [B, H, T, Dh], T is (P^2, 1)
+        x = torch.cat((x0, x1), dim=2)
         cos = self.cos[..., offset:offset + x.size(2), :]
         sin = self.sin[..., offset:offset + x.size(2), :]
-        x0, x1 = x.float().unfold(-1, 2, 2).unbind(-1)
-        y = torch.cat((x0 * cos - x1 * sin, x1 * cos + x0 * sin), dim=-1).type_as(x)
-        outs, pos = [], 0
-        for L in lens:
-            outs.append(y[:, :, pos:pos + L])
-            pos += L
-        return tuple(outs) if len(outs) > 1 else outs[0]
+        r0, r1 = x.float().unfold(-1, 2, 2).unbind(-1)
+        y = torch.cat((r0 * cos - r1 * sin, r1 * cos + r0 * sin), dim=-1).type_as(x)
+        return y.split([size0, size1], dim=2)
 
 
 def visaulize_rope_freqs():
