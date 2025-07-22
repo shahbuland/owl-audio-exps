@@ -91,6 +91,7 @@ class AVRFTTrainer(BaseTrainer):
     def train(self):
         torch.cuda.set_device(self.local_rank)
 
+        print("self.world_size", self.world_size)
         # Prepare model and ema
         self.model = self.model.cuda().train()
         if self.world_size > 1:
