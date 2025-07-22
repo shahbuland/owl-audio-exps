@@ -66,7 +66,7 @@ class AVRoPE(nn.Module):
         )
         # Rot features: (L, P+1, P+1, <pad>)
         freqs = pos_emb.get_axial_freqs(
-            config.n_frames, p + 1, p + 1
+            config.n_frames, p + 1, p + 1, 1, offsets=(0, 0, 0, 1)
         ).view(config.n_frames, p + 1, p + 1, -1)
 
         vid_freqs = freqs[:, :p, :p].reshape(config.n_frames, p**2, -1)  # top left square
