@@ -167,8 +167,8 @@ class AVRFTTrainer(BaseTrainer):
                 #find_unused_params(self.model)
 
                 metrics.log('diffusion_loss', loss)
-                metrics.log('video_loss', loss)
-                metrics.log('audio_loss', loss)
+                metrics.log('video_loss', vid_loss)
+                metrics.log('audio_loss', aud_loss)
 
                 local_step += 1
                 if local_step % accum_steps == 0:
