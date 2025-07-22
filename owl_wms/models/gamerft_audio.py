@@ -159,7 +159,7 @@ class GameRFTAudio(nn.Module):
         diff_loss = video_loss + audio_loss
 
         if not return_dict:
-            return diff_loss
+            return diff_loss, video_loss, audio_loss
         else:
             return {
                 'diffusion_loss': diff_loss,
