@@ -160,7 +160,8 @@ class AVRFTTrainer(BaseTrainer):
                 #cfg_mask = cfg_mask.cuda()
 
                 with ctx:
-                    loss, vid_loss, aud_loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
+                    loss, vid_loss, aud_loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn)
+                    loss = loss / accum_steps
 
                 self.scaler.scale(loss).backward()
                 #find_unused_params(self.model)
