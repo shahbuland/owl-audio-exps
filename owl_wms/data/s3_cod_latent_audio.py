@@ -118,7 +118,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
     def background_download_tars(self):
         while True:
-            if len(self.tar_queue.items) < self.max_tars:
+            if self.tar_queue.qsize() < self.max_tars:
                 tar_path = random.choice(self.tars)
                 max_retries = 3
                 retry_delay = 1
@@ -151,7 +151,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                 raise stream_e
 
 
-                            self.tar_queue.add(tar_data)
+                            self.tar_queue.put(tar_data)
                             if self.verbose:
                                 print(f"[Rank {self.rank}] Added to queue successfully")
                             break  # Success, exit retry loop
@@ -181,12 +181,8 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
     def background_load_data(self):
         while True:
-            if len(self.data_queue.items) < self.max_data:
-                tar_data = self.tar_queue.pop()
-                if tar_data is None:
-                    time.sleep(1)
-                    continue
-
+            if self.data_queue.qsize() < self.max_data:
+                tar_data = self.tar_queue.get()
                 try:
                     tar_file = io.BytesIO(tar_data)
                     with tarfile.open(fileobj=tar_file) as tar:
@@ -219,7 +215,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
                                 # Sample multiple windows if requested
                                 for _ in range(self.file_share_max):
-                                    if len(self.data_queue.items) >= self.max_data:
+                                    if self.data_queue.qsize() >= self.max_data:
                                         break
 
                                     max_start = min_len - self.window
@@ -233,7 +229,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                     button_slice = button[window_start:window_start+self.window]
                                     audio_slice = audio[window_start:window_start+self.window]
 
-                                    self.data_queue.add((latent_slice, mouse_slice, button_slice, audio_slice))
+                                    self.data_queue.put((latent_slice, mouse_slice, button_slice, audio_slice))
 
                 except Exception as e:
                     print(f"Error processing tar: {e}")
@@ -255,11 +251,8 @@ class S3CoDLatentAudioDataset(IterableDataset):
             self._threads_started = True
 
         while True:
-            item = self.data_queue.pop()
-            if item is not None:
-                yield item
-            else:
-                time.sleep(0.1)
+            yield self.data_queue.get()
+
 
 def collate_fn(batch):
     # batch is list of quadruples
