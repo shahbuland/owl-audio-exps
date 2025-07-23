@@ -129,11 +129,14 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
 
 def collate_fn(batch):
+    # batch is list of quadruples
     latents, mouses, buttons, audios = zip(*batch)
-    latents = torch.stack(latents).bfloat16()
-    mouses = torch.stack(mouses).bfloat16()
-    buttons = torch.stack(buttons).bfloat16()
-    audios = torch.stack(audios).bfloat16()
+
+    latents = torch.stack(latents).bfloat16()    # [b,n,c,h,w]
+    mouses = torch.stack(mouses).bfloat16()      # [b,n,2]
+    buttons = torch.stack(buttons).bfloat16()    # [b,n,n_buttons]
+    audios = torch.stack(audios).bfloat16()      # [b,n,d]
+
     return latents, audios, mouses, buttons
 
 def get_loader(batch_size, **data_kwargs):
