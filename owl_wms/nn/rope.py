@@ -88,7 +88,7 @@ class AVRoPE(nn.Module):
             r0 * cos - r1 * sin,
             r1 * cos + r0 * sin
         ), dim=-1).type_as(x)
-        return y.split([L_vidio, L_audio], dim=2)
+        return y.split([size0, size1], dim=2)
 
 
 def visaulize_rope_freqs():
