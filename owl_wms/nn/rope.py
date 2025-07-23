@@ -60,13 +60,14 @@ class AVRoPE(nn.Module):
         assert p**2 + 1 == config.tokens_per_frame
 
         pos_emb = RotaryEmbedding(
-            dim=head_dim // 4,  # Using half dimension since we only need 1D rotation
+            dim=head_dim // 8,  # Using half dimension since we only need 1D rotation
             freqs_for='pixel',
             max_freq=256
         )
         # Rot features: (L, P+1, P+1, <pad>)
         freqs = pos_emb.get_axial_freqs(
-            config.n_frames, p + 1, p + 1, 1, offsets=(0, 0, 0, 1)
+            config.n_frames, p + 1, p + 1, 1,
+            offsets=(0, 0, 0, 1)
         ).view(config.n_frames, p + 1, p + 1, -1)
 
         vid_freqs = freqs[:, :p, :p].reshape(config.n_frames, p**2, -1)  # top left square
@@ -74,9 +75,8 @@ class AVRoPE(nn.Module):
 
         freqs = torch.cat([vid_freqs, aud_freqs], dim=1).flatten(0, 1)
 
-        cos, sin = freqs.cos()[..., ::2], freqs.sin()[..., ::2]  # subsampling
-        self.cos = nn.Buffer(cos.contiguous(), persistent=False)
-        self.sin = nn.Buffer(sin.contiguous(), persistent=False)
+        self.cos = nn.Buffer(freqs.cos().contiguous(), persistent=False)
+        self.sin = nn.Buffer(freqs.sin().contiguous(), persistent=False)
 
     def forward(self, x0, x1, offset: int = 0):
         size0, size1 = x0.size(2), x1.size(2)  # [B, H, T, Dh], T is (P^2, 1)
@@ -84,7 +84,10 @@ class AVRoPE(nn.Module):
         cos = self.cos[..., offset:offset + x.size(2), :]
         sin = self.sin[..., offset:offset + x.size(2), :]
         r0, r1 = x.float().unfold(-1, 2, 2).unbind(-1)
-        y = torch.cat((r0 * cos - r1 * sin, r1 * cos + r0 * sin), dim=-1).type_as(x)
+        y = torch.cat((
+            r0 * cos - r1 * sin,
+            r1 * cos + r0 * sin
+        ), dim=-1).type_as(x)
         return y.split([size0, size1], dim=2)
 
 
