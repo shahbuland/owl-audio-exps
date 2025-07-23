@@ -74,7 +74,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
                     key = random.choice(self.keys)
                     # retryable get_object with backoff
                     try:
-                        resp = self.client.get_object(Bucket=self.bucket_name, Key=key)
+                        resp = client.get_object(Bucket=self.bucket_name, Key=key)
                         body = resp['Body'].read()
                     except (ReadTimeoutError, SSLError, ClientError,
                             ConnectionClosedError, ResponseStreamingError, IncompleteRead) as e:
