@@ -153,7 +153,7 @@ def get_loader(batch_size, **data_kwargs):
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=2,
+        num_workers=1,
         prefetch_factor=4,  # prefetch to mitigate slow batch loads
     )
 
