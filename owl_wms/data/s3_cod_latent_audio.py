@@ -14,20 +14,21 @@ import io
 import time
 from botocore.config import Config
 from botocore.exceptions import ClientError, ConnectionClosedError, SSLError, ReadTimeoutError, ResponseStreamingError
+import queue
 
-class RandomizedQueue:
-    def __init__(self):
-        self.items = []
 
-    def add(self, item):
-        idx = random.randint(0, len(self.items))
-        self.items.insert(idx, item)
+class RandomizedQueue(queue.Queue):
+    def _init(self, maxsize):
+        self.queue = []
 
-    def pop(self):
-        if not self.items:
-            return None
-        idx = random.randint(0, len(self.items) - 1)
-        return self.items.pop(idx)
+    def _put(self, item):
+        idx = random.randint(0, len(self.queue))
+        self.queue.insert(idx, item)
+
+    def _get(self):
+        idx = random.randrange(len(self.queue))
+        return self.queue.pop(idx)
+
 
 class S3CoDLatentAudioDataset(IterableDataset):
     # Class-level semaphore to limit concurrent S3 requests across all instances
@@ -58,12 +59,12 @@ class S3CoDLatentAudioDataset(IterableDataset):
         time.sleep(stagger_delay)
 
         # Queue parameters
-        self.max_tars = 2
+        self.max_tars = world_size
         self.max_data = 1000
 
         # Initialize queues
-        self.tar_queue = RandomizedQueue()
-        self.data_queue = RandomizedQueue()
+        self.tar_queue = RandomizedQueue(maxsize=self.max_tars)
+        self.data_queue = RandomizedQueue(maxsize=self.max_data)
 
         # Setup S3 client with enhanced configuration for multi-node SSL
         config = Config(
@@ -284,8 +285,8 @@ def get_loader(batch_size, **data_kwargs):
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=8,
-        prefetch_factor=4,  # prefetch to mitigate slow batch loads
+        num_workers=world_size * 2,
+        prefetch_factor=8,  # prefetch to mitigate slow batch loads
     )
 
 if __name__ == "__main__":
