@@ -123,8 +123,8 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                     audio [i:i+self.window],
                                 )
                                 self.data_queue.put(item)
-                else:
-                    time.sleep(0.1)
+                #else:
+                #    time.sleep(0.1)
 
         threading.Thread(target=producer, daemon=True).start()
         while True:
