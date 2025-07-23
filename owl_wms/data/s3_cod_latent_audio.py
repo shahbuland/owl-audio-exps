@@ -28,13 +28,13 @@ class S3CoDLatentAudioDataset(IterableDataset):
                  rank=0, world_size=1,
                  bucket_name="cod-latent-depth-4x4",
                  prefix="labelled", verbose=False,
-                 buf=100):
+                 buf=1000):
         super().__init__()
-        self.window        = window_length
+        self.window = window_length
         self.file_share_max = file_share_max
         self.rank, self.world_size = rank, world_size
         self.bucket_name, self.prefix = bucket_name, prefix
-        self.verbose       = verbose
+        self.verbose = verbose
 
         # prepare S3 keys
         self.client = boto3.client("s3")
@@ -97,9 +97,12 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                     audio [i:i+self.window],
                                 )
                                 self.data_queue.put(item)
+                else:
+                    time.sleep(0.1)
 
         threading.Thread(target=producer, daemon=True).start()
         while True:
+            print(self.data_queue.qsize())
             yield self.data_queue.get()
 
 
