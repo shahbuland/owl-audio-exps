@@ -232,7 +232,7 @@ class MMDIT(nn.Module):
         super().__init__()
 
         self.config = config
-        self.blocks = nn.ModuleList([MMDiTBlock2(config) for _ in range(config.n_layers)])
+        self.blocks = nn.ModuleList([MMDiTBlock(config) for _ in range(config.n_layers)])
 
         for i in range(config.n_layers):
             self.blocks[i].attn.layer_ind = i
