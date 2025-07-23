@@ -76,8 +76,8 @@ class AVRoPE(nn.Module):
     def forward(self, x_vidio, x_audio, offset: int = 0):
         L_vidio, L_audio = x_vidio.size(2), x_audio.size(2)  # [B, H, T, Dh], T is (P^2, 1)
         x = torch.cat((x_vidio, x_audio), dim=2)
-        cos = self.cos[..., offset:offset + x.size(2)]
-        sin = self.sin[..., offset:offset + x.size(2)]
+        cos = self.cos[..., offset:offset + x.size(2), :self.rot_feats // 2]
+        sin = self.sin[..., offset:offset + x.size(2), :self.rot_feats // 2]
         x_rot, x_rest = x[..., :self.rot_feats], x[..., self.rot_feats:]
         r0, r1 = x_rot.float().unfold(-1, 2, 2).unbind(-1)
         y_rot = torch.cat((r0 * cos - r1 * sin, r1 * cos + r0 * sin), dim=-1)
