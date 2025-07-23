@@ -30,7 +30,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
     def __init__(self, window_length=120, file_share_max=20,
                  rank=0, world_size=1,
                  bucket_name="cod-latent-depth-4x4",
-                 prefix="labelled", verbose=False,
+                 prefix="labelled", verbose=True,
                  buf=1000):
         super().__init__()
         self.window = window_length
@@ -122,7 +122,8 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
         threading.Thread(target=producer, daemon=True).start()
         while True:
-            print(self.data_queue.qsize())
+            if self.data_queue.qsize() == 1:
+                print("queue empty on rank", self.rank)
             yield self.data_queue.get()
 
 
