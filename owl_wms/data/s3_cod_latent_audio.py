@@ -8,6 +8,8 @@ load_dotenv()
 import random, tarfile, io, queue, torch
 import torch.distributed as dist
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
+from botocore.config import Config
+from botocore.exceptions import ClientError, ConnectionClosedError, SSLError, ReadTimeoutError, ResponseStreamingError
 
 
 class RandomizedQueue(queue.Queue):
@@ -37,7 +39,19 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.verbose = verbose
 
         # prepare S3 keys
-        self.client = boto3.client("s3")
+        cfg = Config(
+            retries={'max_attempts': 10, 'mode': 'adaptive'},
+            connect_timeout=60, read_timeout=300, max_pool_connections=4,
+            signature_version='s3v4', tcp_keepalive=True, parameter_validation=False,
+        )
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=os.environ['AWS_ENDPOINT_URL_S3'],
+            aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+            aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+            region_name=os.environ['AWS_REGION'],
+            config=cfg
+        )
         objs = self.client.list_objects_v2(
             Bucket=bucket_name, Prefix=prefix
         ).get("Contents", [])
@@ -56,10 +70,22 @@ class S3CoDLatentAudioDataset(IterableDataset):
             while True:
                 if self.data_queue.qsize() < self.data_queue.maxsize:
                     key = random.choice(self.keys)
-                    body = self.client.get_object(
-                        Bucket=self.bucket_name, Key=key
-                    )["Body"].read()
-
+                    # retryable get_object with backoff
+                    for attempt in range(3):
+                        try:
+                            resp = self.client.get_object(Bucket=self.bucket_name, Key=key)
+                            body = resp['Body'].read()
+                            break
+                        except (ReadTimeoutError, SSLError, ClientError,
+                                ConnectionClosedError, ResponseStreamingError) as e:
+                            if self.verbose:
+                                print(f"[Rank {self.rank}] S3 read error (attempt {attempt+1}/3): {e}")
+                            if attempt < 2:
+                                time.sleep(2 ** attempt)
+                            else:
+                                body = None
+                    if not body:
+                        continue
                     with tarfile.open(fileobj=io.BytesIO(body)) as tar:
                         bases = {
                             m.name.rsplit(".", 2)[0]
