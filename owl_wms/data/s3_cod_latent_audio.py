@@ -10,6 +10,7 @@ import torch.distributed as dist
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 from botocore.config import Config
 from botocore.exceptions import ClientError, ConnectionClosedError, SSLError, ReadTimeoutError, ResponseStreamingError
+from http.client import IncompleteRead
 
 
 class RandomizedQueue(queue.Queue):
@@ -41,7 +42,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
         # prepare S3 keys
         cfg = Config(
             retries={'max_attempts': 10, 'mode': 'adaptive'},
-            connect_timeout=60, read_timeout=300, max_pool_connections=4,
+            connect_timeout=60, read_timeout=300, max_pool_connections=world_size * 2,
             signature_version='s3v4', tcp_keepalive=True, parameter_validation=False,
         )
         self.client = boto3.client(
@@ -77,7 +78,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
                             body = resp['Body'].read()
                             break
                         except (ReadTimeoutError, SSLError, ClientError,
-                                ConnectionClosedError, ResponseStreamingError) as e:
+                                ConnectionClosedError, ResponseStreamingError, IncompleteRead) as e:
                             if self.verbose:
                                 print(f"[Rank {self.rank}] S3 read error (attempt {attempt+1}/3): {e}")
                             if attempt < 2:
@@ -165,6 +166,7 @@ if __name__ == "__main__":
                        prefix="feats/unlabelled",
                        file_share_max=50)
 
+    import time
     start = time.time()
     batch = next(iter(loader))
     end = time.time()
