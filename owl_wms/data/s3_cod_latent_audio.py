@@ -73,8 +73,12 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
                             latent = load("latent")
                             audio = load("audiolatent")
-                            mouse = load("mouse")   or torch.zeros(latent.size(0), 2)
-                            button = load("buttons") or torch.zeros(latent.size(0), 11)
+                            mouse = load("mouse")
+                            button = load("buttons")
+
+                            mouse = torch.zeros(latent.size(0), 2) if mouse is None else mouse
+                            button = torch.zeros(latent.size(0), 11) if button is None else button
+
                             if latent is None or audio is None:
                                 continue
 
