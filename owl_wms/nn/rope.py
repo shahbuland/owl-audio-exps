@@ -69,8 +69,9 @@ class AVRoPE(nn.Module):
         aud_freqs = base_freqs[:, -1, -1].unsqueeze(1)  # bottom right item
         freqs = torch.cat([vid_freqs, aud_freqs], dim=1).flatten(0, 1)
 
-        self.cos = nn.Buffer(freqs.cos().contiguous(), persistent=False)
-        self.sin = nn.Buffer(freqs.sin().contiguous(), persistent=False)
+        cos, sin = freqs.cos()[..., ::2], freqs.sin()[..., ::2]  # subsampling
+        self.cos = nn.Buffer(cos.contiguous(), persistent=False)
+        self.sin = nn.Buffer(sin.contiguous(), persistent=False)
 
     def forward(self, x_vidio, x_audio, offset: int = 0):
         L_vidio, L_audio = x_vidio.size(2), x_audio.size(2)  # [B, H, T, Dh], T is (P^2, 1)
