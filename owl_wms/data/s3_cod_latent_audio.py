@@ -7,7 +7,7 @@ load_dotenv()
 
 import torch
 import random
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 import torch.distributed as dist
 import tarfile
 import io
@@ -88,12 +88,6 @@ class S3CoDLatentAudioDataset(IterableDataset):
 
         # Get list of available tars
         self.tars = self.list_tars(self.prefix)
-
-        # Start background threads
-        self.tar_thread = threading.Thread(target=self.background_download_tars, daemon=True)
-        self.data_thread = threading.Thread(target=self.background_load_data, daemon=True)
-        self.tar_thread.start()
-        self.data_thread.start()
 
     def list_tars(self, prefix):
         tars = []
@@ -246,6 +240,19 @@ class S3CoDLatentAudioDataset(IterableDataset):
                 time.sleep(1)
 
     def __iter__(self):
+        worker = get_worker_info()
+        if worker is not None and not getattr(self, "_threads_started", False):
+            self.rank = worker.id
+            self.tar_thread = threading.Thread(
+                target=self.background_download_tars, daemon=True
+            )
+            self.data_thread = threading.Thread(
+                target=self.background_load_data, daemon=True
+            )
+            self.tar_thread.start()
+            self.data_thread.start()
+            self._threads_started = True
+
         while True:
             item = self.data_queue.pop()
             if item is not None:
@@ -273,12 +280,11 @@ def get_loader(batch_size, **data_kwargs):
         world_size = 1
 
     ds = S3CoDLatentAudioDataset(rank=rank, world_size=world_size, **data_kwargs)
-    print("world size", world_size, min(world_size, os.cpu_count() // 2))
     return DataLoader(
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=max(min(world_size, os.cpu_count() // 2), 4),
+        num_workers=8,
         prefetch_factor=4,  # prefetch to mitigate slow batch loads
     )
 
