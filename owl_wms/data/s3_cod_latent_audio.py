@@ -72,19 +72,14 @@ class S3CoDLatentAudioDataset(IterableDataset):
                 if self.data_queue.qsize() < self.data_queue.maxsize:
                     key = random.choice(self.keys)
                     # retryable get_object with backoff
-                    for attempt in range(3):
-                        try:
-                            resp = self.client.get_object(Bucket=self.bucket_name, Key=key)
-                            body = resp['Body'].read()
-                            break
-                        except (ReadTimeoutError, SSLError, ClientError,
-                                ConnectionClosedError, ResponseStreamingError, IncompleteRead) as e:
-                            if self.verbose:
-                                print(f"[Rank {self.rank}] S3 read error (attempt {attempt+1}/3): {e}")
-                            if attempt < 2:
-                                time.sleep(2 ** attempt)
-                            else:
-                                body = None
+                    try:
+                        resp = self.client.get_object(Bucket=self.bucket_name, Key=key)
+                        body = resp['Body'].read()
+                    except (ReadTimeoutError, SSLError, ClientError,
+                            ConnectionClosedError, ResponseStreamingError, IncompleteRead) as e:
+                        if self.verbose:
+                            print(f"[Rank {self.rank}] S3 read error: {e}")
+                        continue
                     if not body:
                         continue
                     with tarfile.open(fileobj=io.BytesIO(body)) as tar:
@@ -124,8 +119,6 @@ class S3CoDLatentAudioDataset(IterableDataset):
                                     audio [i:i+self.window],
                                 )
                                 self.data_queue.put(item)
-                #else:
-                #    time.sleep(0.1)
 
         threading.Thread(target=producer, daemon=True).start()
         while True:
