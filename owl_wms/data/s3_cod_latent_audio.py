@@ -39,14 +39,17 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.bucket_name, self.prefix = bucket_name, prefix
         self.verbose = verbose
 
-        # prepare S3 keys
+        # in‑memory buffer of windows
+        self.data_queue = RandomizedQueue(maxsize=buf)
+
+    def get_s3_client(self):
         worker = get_worker_info()
         cfg = Config(
             retries={'max_attempts': 10, 'mode': 'adaptive'},
             connect_timeout=60, read_timeout=300, max_pool_connections=worker.num_workers * 4,
             signature_version='s3v4', tcp_keepalive=True, parameter_validation=False,
         )
-        self.client = boto3.client(
+        return boto3.client(
             "s3",
             endpoint_url=os.environ['AWS_ENDPOINT_URL_S3'],
             aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
@@ -54,15 +57,13 @@ class S3CoDLatentAudioDataset(IterableDataset):
             region_name=os.environ['AWS_REGION'],
             config=cfg
         )
-        objs = self.client.list_objects_v2(
-            Bucket=bucket_name, Prefix=prefix
-        ).get("Contents", [])
-        self.keys = [o["Key"] for o in objs if o["Key"].endswith(".tar")]
-
-        # in‑memory buffer of windows
-        self.data_queue = RandomizedQueue(maxsize=buf)
 
     def __iter__(self):
+
+        client = self.get_s3_client()
+        objs = client.list_objects_v2(Bucket=self.bucket_name, Prefix=self.prefix).get("Contents", [])
+        self.keys = [o["Key"] for o in objs if o["Key"].endswith(".tar")]
+
         worker = get_worker_info()
         if worker:
             random.seed(self.rank * worker.num_workers + worker.id)
