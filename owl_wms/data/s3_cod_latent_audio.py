@@ -40,9 +40,10 @@ class S3CoDLatentAudioDataset(IterableDataset):
         self.verbose = verbose
 
         # prepare S3 keys
+        worker = get_worker_info()
         cfg = Config(
             retries={'max_attempts': 10, 'mode': 'adaptive'},
-            connect_timeout=60, read_timeout=300, max_pool_connections=world_size * 2,
+            connect_timeout=60, read_timeout=300, max_pool_connections=worker.num_workers * 4,
             signature_version='s3v4', tcp_keepalive=True, parameter_validation=False,
         )
         self.client = boto3.client(
@@ -64,8 +65,7 @@ class S3CoDLatentAudioDataset(IterableDataset):
     def __iter__(self):
         worker = get_worker_info()
         if worker:
-            self.rank = worker.id
-            random.seed(worker.id)
+            random.seed(self.rank * worker.num_workers + worker.id)
 
         def producer():
             while True:
@@ -148,7 +148,7 @@ def get_loader(batch_size, **data_kwargs):
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=1,
+        num_workers=4,
         prefetch_factor=4,  # prefetch to mitigate slow batch loads
     )
 
