@@ -50,14 +50,12 @@ class WindowedViewDataset(Dataset):
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         pairs = []
         for i, L in enumerate(ds[seq_key]):
-            print("L:", L)
             if (not include_missing_features) and ds[i]["missing_feature"]:
                 continue
             if (not include_truncated) and ds[i]["truncated"]:
                 continue
             pairs.extend((i, j * window_length) for j in range(int(L) // window_length))
-
-        print(f"{pairs} samples qualified out of {len(ds[seq_key])} total videos")
+        print(f"{len(pairs)} samples qualified out of {len(ds[seq_key])} total videos")
 
         self._index = pairs
 
@@ -68,12 +66,10 @@ class WindowedViewDataset(Dataset):
         row, start = self._index[idx]
         end = start + self.window_length
         ex = self.ds[row]
-        res = {
-            k: torch.frombuffer(memoryview(ex[k]), dtype=torch.float32)[start:end]
-            for k in self.columns
+        return {
+            col: torch.stack([torch.from_numpy(f) for f in ex[col][start:end]])
+            for col in self.columns
         }
-        print({k: v.shape for k, v in res.items()})
-        return res
 
 
 def collate_fn(batch):
