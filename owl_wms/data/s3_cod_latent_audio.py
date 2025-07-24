@@ -30,7 +30,6 @@ class WindowedViewDataset(Dataset):
             dataset_path: str,
             window_length: int,
             split="train",
-            seq_key: str = "seq_len",
             include_missing_features: bool = False,
             include_truncated: bool = True,
             meta_cols=("tarball", "pt_idx", "missing_feature", "truncated", "seq_len"),
@@ -40,22 +39,23 @@ class WindowedViewDataset(Dataset):
 
         # load the dataset and convert feature columns to torch
         pa_ds = pds.dataset(dataset_path, format="ipc")
-        pa_table = pa_ds.to_table()
-        ds = datasets.Dataset(pa_table)   # keep HF-Dataset for convenient indexing
-
-        self.columns = [c for c in ds.column_names if c not in meta_cols]
-        ds.set_format(type="python", columns=self.columns + list(meta_cols))
-        self.ds = ds
+        table = pa_ds.to_table()
+        self.table = table
+        self.columns = [c for c in table.column_names if c not in meta_cols]
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
+        seq_len = table["seq_len"].to_pylist()
+        missing_feature = table["missing_feature"].to_pylist()
+        truncated = table["truncated"].to_pylist()
+
         pairs = []
-        for i, L in enumerate(ds[seq_key]):
-            if (not include_missing_features) and ds[i]["missing_feature"]:
+        for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing_feature, truncated)):
+            if (not include_missing_features) and is_missing:
                 continue
-            if (not include_truncated) and ds[i]["truncated"]:
+            if (not include_truncated) and is_truncated:
                 continue
             pairs.extend((i, j * window_length) for j in range(int(L) // window_length))
-        print(f"{len(pairs)} samples qualified out of {len(ds[seq_key])} total videos")
+        print(f"{len(pairs)} samples qualified out of {len(seq_len)} total videos")
 
         self._index = pairs
 
@@ -65,11 +65,13 @@ class WindowedViewDataset(Dataset):
     def __getitem__(self, idx):
         row, start = self._index[idx]
         end = start + self.window_length
-        ex = self.ds[row]
-        return {
-            col: torch.stack([torch.from_numpy(f) for f in ex[col][start:end]])
-            for col in self.columns
-        }
+
+        res = {}
+        for k in self.columns:
+            cell = self.table[k][row]
+            t = torch.stack([torch.from_numpy(f) for f in cell[start:end]])
+            res[k] = t
+        return res
 
 
 def collate_fn(batch):
