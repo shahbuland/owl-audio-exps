@@ -63,11 +63,10 @@ class WindowedViewDataset(Dataset):
 
     def __getitem__(self, idx):
         row, start = self._index[idx]
-        res = {}
-        for k in self.columns:
-            window_np = self.table[k][row].values.slice(start, self.window_length).to_numpy_ndarray()
-            res[k] = torch.from_numpy(window_np)
-        return res
+        return {
+            self.table[col][row].values.slice(start, self.window_length).to_numpy_ndarray()
+            for col in self.columns
+        }
 
 
 def collate_fn(batch):
@@ -91,10 +90,8 @@ def get_loader(batch_size, dataset_path, window_length):
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=4,
         drop_last=True,
         pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=8,
+        prefetch_factor=4,
         **loader_kwargs
     )
