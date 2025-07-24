@@ -1,4 +1,3 @@
-import datasets
 import pyarrow.dataset as pds
 
 import torch
@@ -64,13 +63,10 @@ class WindowedViewDataset(Dataset):
 
     def __getitem__(self, idx):
         row, start = self._index[idx]
-        end = start + self.window_length
-
         res = {}
         for k in self.columns:
-            cell = self.table[k][row]
-            t = torch.stack([torch.from_numpy(f) for f in cell[start:end]])
-            res[k] = t
+            window_np = self.table[k][row].values.slice(start, self.window_length).to_numpy_ndarray()
+            res[k] = torch.from_numpy(window_np)
         return res
 
 
