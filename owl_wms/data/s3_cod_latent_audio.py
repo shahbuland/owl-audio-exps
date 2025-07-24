@@ -43,7 +43,7 @@ class WindowedViewDataset(Dataset):
         pa_table = pa_ds.to_table()
         ds = datasets.Dataset(pa_table)   # keep HF-Dataset for convenient indexing
 
-        self.columns = [c for c in self.ds.column_names if c not in meta_cols]
+        self.columns = [c for c in ds.column_names if c not in meta_cols]
         ds.set_format(type="python", columns=self.columns + list(meta_cols))
         self.ds = ds
 
@@ -56,7 +56,7 @@ class WindowedViewDataset(Dataset):
                 continue
             pairs.extend((i, j * window_length) for j in range(int(L) // window_length))
 
-        print(f"{pairs} samples in epoch")
+        print(f"{pairs} samples qualified out of {len(ds[seq_key])} total videos")
 
         self._index = pairs
 
