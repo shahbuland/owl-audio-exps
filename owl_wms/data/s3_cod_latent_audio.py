@@ -38,8 +38,7 @@ class WindowedViewDataset(Dataset):
 
         # load the dataset and convert feature columns to torch
         self.dataset = load_dataset(
-            "arrow", data_files=f"{dataset_path}/*.arrow", split=split,
-            keep_in_memory=False, memory_map=True,
+            "arrow", data_files=f"{dataset_path}/*.arrow", split=split, keep_in_memory=False
         )
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
         self.dataset.set_format(type="numpy", columns=self.columns)
