@@ -68,10 +68,12 @@ class WindowedViewDataset(Dataset):
         row, start = self._index[idx]
         end = start + self.window_length
         ex = self.ds[row]
-        return {
+        res = {
             k: torch.frombuffer(memoryview(ex[k]), dtype=torch.float32)[start:end]
             for k in self.columns
         }
+        print({k: v.shape for k, v in res.items()})
+        return res
 
 
 def collate_fn(batch):
