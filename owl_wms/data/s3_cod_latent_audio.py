@@ -1,4 +1,4 @@
-import pyarrow.dataset as pds
+from datasets import load_dataset
 
 import torch
 import torch.distributed as dist
@@ -37,36 +37,36 @@ class WindowedViewDataset(Dataset):
         self.window_length = window_length
 
         # load the dataset and convert feature columns to torch
-        pa_ds = pds.dataset(dataset_path, format="ipc")
-        table = pa_ds.to_table()
-        self.table = table
-        self.columns = [c for c in table.column_names if c not in meta_cols]
+        self.dataset = load_dataset(
+            "arrow", data_files=f"{dataset_path}/*.arrow", split=split,
+            keep_in_memory=False, memory_map=True,
+        )
+        self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
+        self.dataset.set_format(type="numpy", columns=self.columns)
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
-        seq_len = table["seq_len"].to_pylist()
-        missing_feature = table["missing_feature"].to_pylist()
-        truncated = table["truncated"].to_pylist()
-
-        pairs = []
+        seq_len = self.dataset["seq_len"]
+        missing_feature = self.dataset["missing_feature"]
+        truncated = self.dataset["truncated"]
+        index = []
         for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing_feature, truncated)):
             if (not include_missing_features) and is_missing:
                 continue
             if (not include_truncated) and is_truncated:
                 continue
-            pairs.extend((i, j * window_length) for j in range(int(L) // window_length))
-        print(f"{len(pairs)} samples qualified out of {len(seq_len)} total videos")
+            index.extend((i, j * window_length) for j in range(int(L) // window_length))
+        print(f"{len(index)} samples qualified out of {len(seq_len)} total videos")
 
-        self._index = pairs
+        self._index = index
 
     def __len__(self):
         return len(self._index)
 
     def __getitem__(self, idx):
         row, start = self._index[idx]
+        item = self.dataset[row]
         return {
-            col: torch.from_numpy(
-                self.table[col][row].values.slice(start, self.window_length).to_numpy_ndarray()
-            )
+            col: torch.from_numpy(item[col][start: start + self.window_length])
             for col in self.columns
         }
 
