@@ -50,6 +50,7 @@ class WindowedViewDataset(Dataset):
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         pairs = []
         for i, L in enumerate(ds[seq_key]):
+            print("L:", L)
             if (not include_missing_features) and ds[i]["missing_feature"]:
                 continue
             if (not include_truncated) and ds[i]["truncated"]:
