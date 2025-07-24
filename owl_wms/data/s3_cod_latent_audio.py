@@ -64,7 +64,9 @@ class WindowedViewDataset(Dataset):
     def __getitem__(self, idx):
         row, start = self._index[idx]
         return {
-            col: self.table[col][row].values.slice(start, self.window_length).to_numpy_ndarray()
+            col: torch.from_numpy(
+                self.table[col][row].values.slice(start, self.window_length).to_numpy_ndarray()
+            )
             for col in self.columns
         }
 
