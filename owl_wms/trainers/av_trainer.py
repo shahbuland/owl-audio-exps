@@ -1,14 +1,12 @@
 import torch
+from tqdm import tqdm
 from ema_pytorch import EMA
 import wandb
-import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
-import einops as eo
 
 from .base import BaseTrainer
 
-from ..utils import freeze, Timer, find_unused_params
+from ..utils import freeze, Timer
 from ..schedulers import get_scheduler_cls
 from ..models import get_model_cls
 from ..sampling import get_sampler_cls
@@ -28,7 +26,7 @@ class AVRFTTrainer(BaseTrainer):
     :param local_rank: Rank for current device on this process.
     :param world_size: Overall number of devices
     """
-    def __init__(self,*args,**kwargs):  
+    def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
 
         model_id = self.model_cfg.model_id
@@ -70,7 +68,7 @@ class AVRFTTrainer(BaseTrainer):
         if self.scheduler is not None:
             save_dict['scheduler'] = self.scheduler.state_dict()
         super().save(save_dict)
-    
+
     def load(self):
         if hasattr(self.train_cfg, 'resume_ckpt') and self.train_cfg.resume_ckpt is not None:
             save_dict = super().load(self.train_cfg.resume_ckpt)
@@ -79,7 +77,7 @@ class AVRFTTrainer(BaseTrainer):
             print("Failed to load checkpoint")
             return
 
-        
+
         self.model.load_state_dict(save_dict['model'])
         self.ema.load_state_dict(save_dict['ema'])
         self.opt.load_state_dict(save_dict['opt'])
@@ -90,6 +88,7 @@ class AVRFTTrainer(BaseTrainer):
 
     def train(self):
         torch.cuda.set_device(self.local_rank)
+        print(f"Device used: rank={self.rank}")
 
         # Prepare model and ema
         self.model = self.model.cuda().train()
@@ -150,24 +149,19 @@ class AVRFTTrainer(BaseTrainer):
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
         local_step = 0
-        for _ in range(self.train_cfg.epochs):
-            for batch_vid, batch_audio, batch_mouse, batch_btn in loader:
-                batch_vid = batch_vid.cuda().bfloat16() / self.train_cfg.vae_scale
-                batch_audio = batch_audio.cuda().bfloat16() / self.train_cfg.audio_vae_scale
-                batch_mouse = batch_mouse.cuda().bfloat16()
-                batch_btn = batch_btn.cuda().bfloat16()
-                #cfg_mask = cfg_mask.cuda()
+        for epoch in range(self.train_cfg.epochs):
+            for batch in tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
+
+                batch_vid, batch_audio, batch_mouse, batch_btn = [t.cuda().bfloat16() for t in batch]
+                batch_vid = batch_vid / self.train_cfg.vae_scale
+                batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
                 with ctx:
-                    loss, vid_loss, aud_loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn)
-                    loss = loss / accum_steps
+                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
 
                 self.scaler.scale(loss).backward()
-                #find_unused_params(self.model)
 
                 metrics.log('diffusion_loss', loss)
-                metrics.log('video_loss', vid_loss)
-                metrics.log('audio_loss', aud_loss)
 
                 local_step += 1
                 if local_step % accum_steps == 0:
@@ -210,7 +204,7 @@ class AVRFTTrainer(BaseTrainer):
                                 ) # -> [b,n,c,h,w]
                                 if self.rank == 0:
                                     wandb_av_out = to_wandb_av(samples, audio, sample_mouse, sample_button)
-                                    if len(wandb_av_out) == 3:  
+                                    if len(wandb_av_out) == 3:
                                         video, depth_gif, flow_gif = wandb_av_out
                                         wandb_dict['samples'] = video
                                         wandb_dict['depth_gif'] = depth_gif
@@ -218,7 +212,7 @@ class AVRFTTrainer(BaseTrainer):
                                     else:
                                         video = wandb_av_out
                                         wandb_dict['samples'] = video
-                            
+
                         if self.rank == 0:
                             wandb.log(wandb_dict)
 
@@ -226,5 +220,5 @@ class AVRFTTrainer(BaseTrainer):
                     if self.total_step_counter % self.train_cfg.save_interval == 0:
                         if self.rank == 0:
                             self.save()
-                        
+
                     self.barrier()
