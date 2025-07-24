@@ -56,6 +56,8 @@ class WindowedViewDataset(Dataset):
                 continue
             pairs.extend((i, j * window_length) for j in range(int(L) // window_length))
 
+        print(f"{pairs} samples in epoch")
+
         self._index = pairs
 
     def __len__(self):
