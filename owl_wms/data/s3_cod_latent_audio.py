@@ -68,9 +68,8 @@ class WindowedViewDataset(Dataset):
         row, start = self._index[idx]
         end = start + self.window_length
         ex = self.ds[row]
-        seq_len = self.ds[row]["seq_len"]
         return {
-            k: torch.frombuffer(memoryview(ex[k]), dtype=torch.float32).view(seq_len, -1)[start:end]
+            k: torch.frombuffer(memoryview(ex[k]), dtype=torch.float32)[start:end]
             for k in self.columns
         }
 
