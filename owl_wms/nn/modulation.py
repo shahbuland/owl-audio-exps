@@ -23,7 +23,7 @@ class AdaLN(nn.Module):
         ab = ab.reshape(b, nm, 2*d)        # [b, nm, 2d]
 
         a, b_ = ab.chunk(2, dim=-1)        # [b, nm, d] each
-        x = self.norm(x) * (1 + a) + b_
+        x = (self.norm(x) * (1 + a) + b_).type_as(x)
         return x
 
 class Gate(nn.Module):
