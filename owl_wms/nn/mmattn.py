@@ -53,15 +53,16 @@ class MMAttn(nn.Module):
             q, k, v = self.split_qkv(self.qkv_projs[i](x), self.tok_per_frame_mod[i]).unbind(0)
             q, k = rms_norm(q), rms_norm(k)
 
-            # prepend cached values
-            offset = kv_cache[i].length_at(self.layer_idx) if kv_cache is not None else 0
-            if offset > 0:
-                old_k, old_v = kv_cache[i].get(self.layer_idx)
-                k, v = torch.cat([old_k, k], dim=2), torch.cat([old_v, v], dim=2)
-
-            # update cache
-            if kv_cache is not None and kv_cache.should_update:
-                kv_cache[i].update(k.clone(), v.clone(), self.layer_idx)
+            if kv_cache is not None:
+                # prepend cached values and update cache
+                offset = kv_cache[i].length_at(self.layer_idx)
+                if offset > 0:
+                    old_k, old_v = kv_cache[i].get(self.layer_idx)
+                    k, v = torch.cat([old_k, k], dim=2), torch.cat([old_v, v], dim=2)
+                if kv_cache.should_update:
+                    kv_cache[i].update(k.clone(), v.clone(), self.layer_idx)
+            else:
+                offset = 0
 
             qs.append(q)
             ks.append(k)
