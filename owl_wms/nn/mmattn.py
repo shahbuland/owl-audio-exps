@@ -65,6 +65,7 @@ class MMAttn(nn.Module):
 
         q1,k1 = self.qk_norm_1(q1,k1)
         q2,k2 = self.qk_norm_2(q2,k2)
+        q1, k1, q2, k2 = [x.type_as(v1) for x in [q1, k1, q2, k2]]
 
         if not self.causal or (kv_cache is not None and len(kv_cache[0]) > 0):
             mask = None
