@@ -6,6 +6,7 @@ I made a unique script for all of them here
 from rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
 import torch
 from torch import nn
+from torch.cuda.amp import autocast
 
 import einops as eo
 from einops._torch_specific import allow_ops_in_compiled_graph  # requires einops>=0.6.1
@@ -38,6 +39,7 @@ class FlatVideoRoPE(nn.Module):
         self.cos = nn.Buffer(cos.contiguous(), persistent=False)
         self.sin = nn.Buffer(sin.contiguous(), persistent=False)
 
+    @autocast(enabled=False)
     def forward(self, x: torch.Tensor, offset: int = 0) -> torch.Tensor:
         """x is either q or k. Shaped as [B, H, n_frames*tokens_per_frame, Dh]"""
         assert self.cos.dtype == torch.float32
@@ -78,6 +80,7 @@ class AVRoPE(nn.Module):
         self.cos = nn.Buffer(cos.contiguous(), persistent=False)
         self.sin = nn.Buffer(sin.contiguous(), persistent=False)
 
+    @autocast(enabled=False)
     def forward(self, x, offset: int = 0):
         assert self.cos.dtype == torch.float32
         cos = self.cos[..., offset:offset + x.size(2), :]
