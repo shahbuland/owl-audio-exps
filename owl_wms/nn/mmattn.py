@@ -132,13 +132,15 @@ class MMDIT(nn.Module):
         self.config = config
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
-        # Air-Dit: Tie all AdaLN parameters in each layer to layer 0's weights
+        """
+        # DiT-Air: Tie all AdaLN parameters in each layer to layer 0's weights
         # https://arxiv.org/html/2503.10618v2
         for blk in self.blocks[1:]:
             for ref_adaln, adaln in zip(self.blocks[0].attn_adalns, blk.attn_adalns):
                 adaln._parameters = ref_adaln._parameters
             for ref_adaln, adaln in zip(self.blocks[0].mlp_adalns, blk.mlp_adalns):
                 adaln._parameters = ref_adaln._parameters
+        """
 
     def get_block_mask(self, x0, x1, kv_cache):
         if not self.config.causal:
