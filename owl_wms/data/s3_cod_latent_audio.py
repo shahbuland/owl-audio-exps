@@ -49,12 +49,7 @@ class WindowedViewDataset(Dataset):
         truncated = self.dataset.data["truncated"].to_pylist()
 
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
-
-        self.dataset.set_format(type="torch", columns=self.columns)
-        first_row = self.dataset[0]
-        self.frame_shapes = {col: first_row[col].shape[1:] for col in self.columns}
-
-        self.dataset.set_format(None)
+        self.dataset.set_format("numpy", columns=self.columns)
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         index = []
@@ -74,23 +69,13 @@ class WindowedViewDataset(Dataset):
     def __getitem__(self, idx):
         import time
         tstart = time.time()
-        row, start = self._index[idx]
-        col_data = self.dataset.data  # Arrow table
-
-        def slice_to_tensor(col):
-            """
-            Arrow List<FixedSizeList>  →  torch.Tensor(window_len, D)
-            Zero‑copy Arrow→NumPy; no chunk arithmetic needed.
-            """
-            list_scalar = col_data[col][row]        # pyarrow.ListScalar
-            frame_arr   = list_scalar.values         # FixedSizeListArray (seq_len frames)
-            window_arr  = frame_arr.slice(start, self.window_length)
-
-            flat  = window_arr.values.to_numpy(zero_copy_only=True)
-            inner = self.frame_shapes[col]            # e.g. (c,h,w)
-            return torch.from_numpy(flat.reshape(-1, *inner))
-
-        res = {col: slice_to_tensor(col) for col in self.columns}
+        row_idx, start = self._index[idx]
+        item = self.dataset[row_idx]
+        res = {}
+        for col in self.columns:
+            # Slicing works correctly on the first dimension (seq_len)
+            window_slice = item[col][start : start + self.window_length]
+            res[col] = torch.from_numpy(window_slice)
         print("get sample time", time.time() - tstart)
         return res
 
