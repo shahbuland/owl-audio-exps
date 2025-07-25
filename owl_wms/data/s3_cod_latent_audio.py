@@ -31,21 +31,24 @@ class WindowedViewDataset(Dataset):
             split="train",
             include_missing_features: bool = False,
             include_truncated: bool = True,
-            meta_cols=("tarball", "pt_idx", "missing_feature", "truncated", "seq_len"),
+            meta_cols=("tarball", "pt_idx", "missing", "truncated", "seq_len"),
 
     ):
         self.window_length = window_length
 
         # load the dataset and convert feature columns to torch
         self.dataset = load_dataset(
-            "arrow", data_files=f"{dataset_path}/*.arrow", split=split, keep_in_memory=False
+            "parquet",
+            data_files=f"{dataset_path}/*.parquet",
+            split=split,
+            keep_in_memory=False
         )
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
         self.dataset.set_format(type="numpy", columns=self.columns)
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         seq_len = self.dataset["seq_len"]
-        missing_feature = self.dataset["missing_feature"]
+        missing_feature = self.dataset["missing"]
         truncated = self.dataset["truncated"]
         index = []
         for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing_feature, truncated)):
