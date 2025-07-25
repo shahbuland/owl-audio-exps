@@ -49,7 +49,7 @@ class WindowedViewDataset(Dataset):
         truncated = self.dataset.data["truncated"].to_pylist()
 
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
-        self.dataset.set_format(type="numpy", columns=self.columns)
+        self.dataset.set_format(None)
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         index = []
@@ -70,11 +70,25 @@ class WindowedViewDataset(Dataset):
         import time
         tstart = time.time()
         row, start = self._index[idx]
-        item = self.dataset[row]
-        res = {
-            col: torch.from_numpy(item[col][start: start + self.window_length])
-            for col in self.columns
-        }
+        col_data = self.dataset.data
+        def slice_to_tensor(col):
+            """
+            Arrow List<FixedSizeList>  →  torch.Tensor(window_len, D)
+            using zero‑copy where possible.
+            """
+            arr       = col_data[col]                     # ListArray
+            offsets   = arr.offsets.to_numpy(zero_copy_only=True)
+            begin     = offsets[row] + start
+            # FixedSizeListArray of length=window_len
+            window    = arr.values.slice(begin, self.window_length)
+            flat      = window.values.to_numpy()          # 1‑D view
+            D         = window.type.list_size
+            tensor    = torch.from_numpy(flat.reshape(-1, D))
+            if tensor.dtype == torch.float64:             # PyArrow → float64 fallback
+                tensor = tensor.float()
+            return tensor
+
+        res = {col: slice_to_tensor(col) for col in self.columns}
         print("get sample time", time.time() - tstart)
         return res
 
