@@ -31,25 +31,16 @@ class MMAttn(nn.Module):
     """
     def __init__(self, config : 'TransformerConfig'):
         super().__init__()
-
+        self.config = config
         self.n_heads = config.n_heads
 
-        self.qkv_1 = nn.Linear(config.d_model, 3 * config.d_model)
-        self.qkv_2 = nn.Linear(config.d_model, 3 * config.d_model)
-
-        self.out_1 = nn.Linear(config.d_model, config.d_model)
-        self.out_2 = nn.Linear(config.d_model, config.d_model)
-
-        self.qk_norm_1 = QKNorm(config.d_model // config.n_heads)
-        self.qk_norm_2 = QKNorm(config.d_model // config.n_heads)
-
-        self.config = config
-        self.causal = config.causal
-
+        self.qkv_projs = nn.ModuleList([nn.Linear(config.d_model, 3 * config.d_model) for _ in range(2)])
+        self.out_projs = nn.ModuleList([nn.Linear(config.d_model, config.d_model)for _ in range(2)])
+        self.qk_norms = nn.ModuleList([QKNorm(config.d_model // self.n_heads) for _ in range(2)])
         self.rope = AVRoPE(config)
 
     def split(self, qkv):
-        return eo.rearrange(qkv, 'b n (three h d) -> three b h n d', three = 3, h = self.n_heads)
+        return eo.rearrange(qkv, 'b n (three h d) -> three b h n d', three=3, h=self.n_heads)
 
     def merge(self, x):
         return eo.rearrange(x, 'b h n d -> b n (h d)')
@@ -60,61 +51,39 @@ class MMAttn(nn.Module):
         """
         n1 = x_1.shape[1]
 
-        q1,k1,v1 = self.split(self.qkv_1(x_1))
-        q2,k2,v2 = self.split(self.qkv_2(x_2))
+        qs, ks, vs = [], [], []
+        for i, x in enumerate([x_1, x_2]):
+            q, k, v = self.split(self.qkv_projs[i](x))
+            q, k = self.qk_norms[i](q, k)
+            q, k = q.type_as(v), k.type_as(v)
 
-        q1,k1 = self.qk_norm_1(q1,k1)
-        q2,k2 = self.qk_norm_2(q2,k2)
-        q1, k1, q2, k2 = [x.type_as(v1) for x in [q1, k1, q2, k2]]
+            # rotate new queries and keys
+            offset = kv_cache[i].length_at(self.layer_ind) if kv_cache is not None else 0
+            q, k = self.rope(q, offset=offset), self.rope(k, offset=offset)
 
-        if not self.causal or (kv_cache is not None and len(kv_cache[0]) > 0):
-            mask = None
+            # prepend cached values
+            if offset > 0:
+                old_k, old_v = kv_cache[i].get(self.layer_ind)
+                k = torch.cat([old_k, k], dim=2)
+                v = torch.cat([old_v, v], dim=2)
 
-        if kv_cache is not None:
-            if len(kv_cache) > 0: # TODO Fix this later
-                old_k1, old_v1 = kv_cache[0].get(self.layer_ind)
-                old_k2, old_v2 = kv_cache[1].get(self.layer_ind)
+            # update cache
+            if kv_cache is not None and kv_cache.should_update:
+                kv_cache.update(k.clone(), v.clone(), self.layer_ind)
 
-                new_k1 = torch.cat([old_k1, k1], dim=2).contiguous()
-                new_v1 = torch.cat([old_v1, v1], dim=2).contiguous()
-                new_k2 = torch.cat([old_k2, k2], dim=2).contiguous()
-                new_v2 = torch.cat([old_v2, v2], dim=2).contiguous()
-            else:
-                new_k1 = k1.contiguous()
-                new_v1 = v1.contiguous()
-                new_k2 = k2.contiguous()
-                new_v2 = v2.contiguous()
+            qs.append(q)
+            ks.append(k)
+            vs.append(v)
 
-            if kv_cache.should_update:
-                kv_cache[0].update(new_k1, new_v1, self.layer_ind)
-                kv_cache[1].update(new_k2, new_v2, self.layer_ind)
+        qs, ks, vs = torch.cat(qs, dim=-2), torch.cat(ks, dim=-2), torch.cat(vs, dim=-2)
 
-            q1, q2 = self.rope(q1, q2)
-            new_k1, new_k2 = self.rope(new_k1, new_k2)
+        attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
+        attn_out = self.merge(attn_out)
 
-            q = torch.cat([q1, q2], dim=-2)
-            k = torch.cat([new_k1, new_k2], dim=-2)
-            v = torch.cat([new_v1, new_v2], dim=-2)
-
-            x = flex_attention(q, k, v, block_mask=block_mask)
-            x = x[:,:,-q.shape[2]:] # Only keep latest outputs
-            x = self.merge(x)
-        else:
-            q1, q2 = self.rope(q1,q2)
-            k1, k2 = self.rope(k1,k2)
-
-            q = torch.cat([q1,q2],dim=-2)
-            k = torch.cat([k1,k2],dim=-2)
-            v = torch.cat([v1,v2],dim=-2)
-
-            x = flex_attention(q, k, v, block_mask=block_mask)
-            x = self.merge(x)
-
-        x_1, x_2 = x[:,:n1], x[:,n1:]
-        x_1 = self.out_1(x_1)
-        x_2 = self.out_2(x_2)
-
+        x_1, x_2 = attn_out[:, :n1], attn_out[:, n1:]
+        x_1, x_2 = self.out_projs[0](x_1).contiguous(), self.outs_projs[1](x_1).contiguous()
         return x_1, x_2
+
 
 class MMDiTBlock(nn.Module):
     def __init__(self, config):
