@@ -158,7 +158,8 @@ class AVRFTTrainer(BaseTrainer):
                 batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
                 with ctx:
-                    loss, video_loss, audio_loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn)
+                    with torch.autograd.set_detect_anomaly(True):
+                        loss, video_loss, audio_loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn)
                     loss = loss / accum_steps
 
                 self.scaler.scale(loss).backward()
