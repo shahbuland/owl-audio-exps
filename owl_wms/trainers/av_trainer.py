@@ -152,14 +152,15 @@ class AVRFTTrainer(BaseTrainer):
         for epoch in range(self.train_cfg.epochs):
             for batch in tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
 
-                print("batch shapes:", [(b.shape, b.device) for b in batch])
-
-                batch_vid, batch_audio, batch_mouse, batch_btn = [t.cuda().bfloat16() for t in batch]
+                batch = [t.cuda().bfloat16() for t in batch]
+                batch_vid, batch_audio, batch_mouse, batch_btn = batch
                 batch_vid = batch_vid / self.train_cfg.vae_scale
                 batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
+                print("batch shapes:", [(b.shape, b.device) for b in batch])
+
                 with ctx:
-                    print("model fwd on")
+                    print("model fwd on device=", next(self.model.parameters()).device)
                     loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
                     print("end fwd, loss.device=", loss.device)
 
