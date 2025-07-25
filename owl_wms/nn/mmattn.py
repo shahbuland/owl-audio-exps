@@ -95,32 +95,30 @@ class MMDiTBlock(nn.Module):
         self.attn = MMAttn(config, layer_idx)
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
-        # Stream 1 - AdaLN and gating
-        self.adaln1_1 = AdaLN(dim)
-        self.gate1_1 = Gate(dim)
-        self.adaln2_1 = AdaLN(dim)
-        self.gate2_1 = Gate(dim)
+        self.attn_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
+        self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
 
-        # Stream 2 - AdaLN and gating (was LayerNorm)
-        self.adaln1_2 = AdaLN(dim)
-        self.gate1_2 = Gate(dim)
-        self.adaln2_2 = AdaLN(dim)
-        self.gate2_2 = Gate(dim)
+        self.mlp_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
+        self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
+
+    def ada_mlp(self, x, cond, modality_idx):
+        res = x.clone()
+        x = self.mlp_adalns[modality_idx](x, cond)
+        x = self.mlps[modality_idx](x)
+        x = self.mlp_gates[modality_idx](x, cond)
+        x = x + res
+        return x
 
     def forward(self, x0, x1, cond, block_mask=None, kv_cache=None):
         # Conditioned Attention
         res_x0, res_x1 = x0.clone(), x1.clone()
-        x0, x1 = self.adaln1_1(x0, cond), self.adaln1_2(x1, cond)
+        x0, x1 = self.attn_adalns[0](x0, cond), self.attn_adalns[1](x1, cond)
         x0, x1 = self.attn(x0, x1, block_mask, kv_cache)
-        x0, x1 = self.gate1_1(x0, cond), self.gate1_2(x1, cond)
+        x0, x1 = self.attn_gates[0](x0, cond), self.attn_gates[1](x1, cond)
         x0, x1 = (res_x0 + x0), (res_x1 + x1)
 
         # Conditioned MLP
-        res_x0, res_x1 = x0.clone(), x1.clone()
-        x0, x1 = self.adaln2_1(x0, cond), self.adaln2_2(x1, cond)
-        x0, x1 = self.mlps[0](x0), self.mlps[1](x1)
-        x0, x1 = self.gate2_1(x0, cond), self.gate2_2(x1, cond)
-        x0, x1 = (res_x0 + x0), (res_x1 + x1)
+        x0, x1 = self.ada_mlp(x0, cond, 0), self.ada_mlp(x1, cond, 1)
 
         return x0, x1
 
