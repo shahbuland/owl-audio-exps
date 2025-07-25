@@ -57,6 +57,8 @@ class MMAttn(nn.Module):
         # interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]
         q, k, v = [eo.rearrange(x, 'b h f n d -> b h (f n) d') for x in [q, k, v]]
 
+        q, k = rms_norm(q), rms_norm(k)
+
         # rotate new queries and keys (shared kv cache between modalities)
         offset = kv_cache.length_at(self.layer_idx) if kv_cache is not None else 0
         q = self.rope(q, offset=offset)
