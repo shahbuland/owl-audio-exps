@@ -43,15 +43,15 @@ class WindowedViewDataset(Dataset):
             split=split,
             keep_in_memory=False
         )
+
+        seq_len, missing, truncated = self.dataset["seq_len"], self.dataset["missing"], self.dataset["truncated"]
+
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
         self.dataset.set_format(type="numpy", columns=self.columns)
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
-        seq_len = self.dataset["seq_len"]
-        missing_feature = self.dataset["missing"]
-        truncated = self.dataset["truncated"]
         index = []
-        for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing_feature, truncated)):
+        for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing, truncated)):
             if (not include_missing_features) and is_missing:
                 continue
             if (not include_truncated) and is_truncated:
