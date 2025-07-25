@@ -165,7 +165,7 @@ class AVRFTTrainer(BaseTrainer):
 
                 metrics.log('diffusion_loss', loss)
                 metrics.log('video_loss', video_loss)
-                metrics.log('audio_loss', video_loss)
+                metrics.log('audio_loss', audio_loss)
 
                 local_step += 1
                 if local_step % accum_steps == 0:
