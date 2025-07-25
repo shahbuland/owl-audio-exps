@@ -137,7 +137,7 @@ class AVRFTTrainer(BaseTrainer):
         metrics = LogHelper()
         #if self.rank == 0:
         #    wandb.watch(self.get_module(), log = 'all')
-        
+
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
         sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.n_samples, **self.train_cfg.sample_data_kwargs)
@@ -157,7 +157,9 @@ class AVRFTTrainer(BaseTrainer):
                 batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
                 with ctx:
+                    print("model fwd")
                     loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
+                    print("end fwd")
 
                 self.scaler.scale(loss).backward()
 
@@ -186,7 +188,7 @@ class AVRFTTrainer(BaseTrainer):
                         timer.reset()
 
                         # Sampling commented out for now
-                        if self.total_step_counter % self.train_cfg.sample_interval == 0 and self.rank == 0:
+                        if False:  #self.total_step_counter % self.train_cfg.sample_interval == 0 and self.rank == 0:
                             with ctx, torch.no_grad():
 
                                 vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
