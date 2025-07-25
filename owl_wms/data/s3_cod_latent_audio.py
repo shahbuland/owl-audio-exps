@@ -102,7 +102,7 @@ def get_loader(batch_size, dataset_path, window_length):
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=1,
+        num_workers=8,
         drop_last=True,
         pin_memory=True,
         prefetch_factor=4,
