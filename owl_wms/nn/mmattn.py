@@ -40,14 +40,8 @@ class MMAttn(nn.Module):
         self.out_projs = nn.ModuleList([nn.Linear(config.d_model, config.d_model)for _ in range(2)])
         self.rope = AVRoPE(config)
 
-    def split(self, qkv, n_tok):
-        return eo.rearrange(
-            qkv, 'b (f n) (three h d) -> three b h f n d', n=n_tok, three=3, h=self.n_heads
-        ).unbind(0)
-
-    def interleave(self, x):
-        """interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]"""
-        return eo.rearrange(x, 'b h f n d -> b h (f n) d')
+    def split_qkv(self, qkv, n_tok):
+        return eo.rearrange(qkv, 'b (f n) (three h d) -> three b h f n d', n=n_tok, three=3, h=self.n_heads)
 
     def forward(self, x0, x1, block_mask=None, kv_cache=None):
         """
@@ -56,7 +50,7 @@ class MMAttn(nn.Module):
         # calculate qs, ks, vs for each modality, and update kv cache
         qs, ks, vs = [], [], []
         for i, x in enumerate([x0, x1]):
-            q, k, v = self.split(self.qkv_projs[i](x), self.tok_per_frame_mod[i])
+            q, k, v = self.split_qkv(self.qkv_projs[i](x), self.tok_per_frame_mod[i]).unbind(0)
             q, k = rms_norm(q), rms_norm(k)
 
             # prepend cached values
@@ -74,12 +68,16 @@ class MMAttn(nn.Module):
             vs.append(v)
 
         # concat along `f` of [(b, h, f, 64, d), (b, h, f, 1, d)]
-        qs, ks, vs = [self.interleave(torch.cat(x, dim=3)) for x in [qs, ks, vs]]
+        # and interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]
+        qs, ks, vs = torch.cat(qs, dim=3), torch.cat(vs, dim=3), torch.cat(vs, dim=3)
+        qs, ks, vs = [eo.rearrange(x, 'b h f n d -> b h (f n) d') for x in [qs, ks, vs]]
 
+        # Rotary -> Attention
         qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)  # TODO: offset only from 2nd modality, fix
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
         attn_out = eo.rearrange(attn_out, 'b h n d -> b n (h d)')  # merge heads
 
+        # Split into original modalities + out proj
         V = self.config.sample_size**2
         x0, x1 = eo.rearrange(attn_out, 'b (f n) d -> b f n d', n=V + 1).split([V, 1], dim=2)
         x0, x1 = x0.flatten(1, 2), x1.flatten(1, 2)
