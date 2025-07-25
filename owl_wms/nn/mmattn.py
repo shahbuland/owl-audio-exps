@@ -45,7 +45,7 @@ class MMAttn(nn.Module):
     def merge(self, x):
         return eo.rearrange(x, 'b h n d -> b n (h d)')
 
-    def forward(self, x_1, x_2, block_mask = None, kv_cache = None):
+    def forward(self, x_1, x_2, block_mask=None, kv_cache=None):
         """
         For MMDiT we assume kv_cache is a tuple of two caches
         """
@@ -58,11 +58,8 @@ class MMAttn(nn.Module):
             q, k = self.qk_norms[i](q, k)
             q, k = q.type_as(v), k.type_as(v)
 
-            # rotate new queries and keys
-            offset = kv_cache[i].length_at(self.layer_ind) if kv_cache is not None else 0
-            q, k = self.rope(q, offset=offset), self.rope(k, offset=offset)
-
             # prepend cached values
+            offset = kv_cache[i].length_at(self.layer_ind) if kv_cache is not None else 0
             if offset > 0:
                 old_k, old_v = kv_cache[i].get(self.layer_ind)
                 k = torch.cat([old_k, k], dim=2)
@@ -77,6 +74,7 @@ class MMAttn(nn.Module):
             vs.append(v)
 
         qs, ks, vs = torch.cat(qs, dim=-2), torch.cat(ks, dim=-2), torch.cat(vs, dim=-2)
+        qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)
 
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
         attn_out = self.merge(attn_out)
