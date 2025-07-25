@@ -37,19 +37,19 @@ class WindowedViewDataset(Dataset):
         self.window_length = window_length
 
         # load the dataset and convert feature columns to torch
-        self.dataset = load_dataset(
+        dataset = load_dataset(
             "parquet",
             data_files=f"{dataset_path}/*.parquet",
             split=split,
             keep_in_memory=False
         )
+        self.arrow_table = dataset.data
 
-        seq_len = self.dataset.data["seq_len"].to_pylist()
-        missing = self.dataset.data["missing"].to_pylist()
-        truncated = self.dataset.data["truncated"].to_pylist()
+        seq_len = dataset.data["seq_len"].to_pylist()
+        missing = dataset.data["missing"].to_pylist()
+        truncated = dataset.data["truncated"].to_pylist()
 
-        self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
-        self.dataset.set_format("numpy", columns=self.columns)
+        self.columns = [c for c in dataset.column_names if c not in meta_cols]
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         index = []
@@ -69,13 +69,14 @@ class WindowedViewDataset(Dataset):
     def __getitem__(self, idx):
         import time
         tstart = time.time()
-        row_idx, start = self._index[idx]
-        item = self.dataset[row_idx]
+        row_idx, start_frame = self._index[idx]
         res = {}
         for col in self.columns:
-            # Slicing works correctly on the first dimension (seq_len)
-            window_slice = item[col][start : start + self.window_length]
-            res[col] = torch.from_numpy(window_slice)
+            list_scalar = self.arrow_table[col][row_idx]
+            window_view = list_scalar.values.slice(start_frame, self.window_length)
+            numpy_slice = window_view.to_numpy(zero_copy_only=False)
+            res[col] = torch.from_numpy(numpy_slice)
+
         print("get sample time", time.time() - tstart)
         return res
 
