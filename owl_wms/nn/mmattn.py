@@ -45,8 +45,9 @@ class MMAttn(nn.Module):
             qkv, 'b (f n) (three h d) -> three b h f n d', n=n_tok, three=3, h=self.n_heads
         ).unbind(0)
 
-    def merge(self, x):                           # heads → model dim
-        return eo.rearrange(x, 'b h n d -> b n (h d)')
+    def interleave(self, x):
+        """interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]"""
+        return eo.rearrange(x, 'b h f n d -> b h (f n) d')
 
     def forward(self, x0, x1, block_mask=None, kv_cache=None):
         """
@@ -62,8 +63,7 @@ class MMAttn(nn.Module):
             offset = kv_cache[i].length_at(self.layer_idx) if kv_cache is not None else 0
             if offset > 0:
                 old_k, old_v = kv_cache[i].get(self.layer_idx)
-                k = torch.cat([old_k, k], dim=2)
-                v = torch.cat([old_v, v], dim=2)
+                k, v = torch.cat([old_k, k], dim=2), torch.cat([old_v, v], dim=2)
 
             # update cache
             if kv_cache is not None and kv_cache.should_update:
@@ -73,22 +73,19 @@ class MMAttn(nn.Module):
             ks.append(k)
             vs.append(v)
 
-        # interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]
-        qs = eo.rearrange(torch.cat(qs, dim=4), 'b h f n d -> b h (f n) d')
-        ks = eo.rearrange(torch.cat(ks, dim=4), 'b h f n d -> b h (f n) d')
-        vs = eo.rearrange(torch.cat(vs, dim=4), 'b h f n d -> b h (f n) d')
+        qs, ks, vs = [self.interleave(torch.cat(x, dim=4)) for x in [qs, ks, vs]]
 
         qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)  # TODO: offset only from 2nd modality, fix
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
-        attn_out = self.merge(attn_out)
+        attn_out = eo.rearrange(attn_out, 'b h n d -> b n (h d)')  # merge heads
 
         V = self.config.sample_size**2
-        attn_out = eo.rearrange(attn_out, 'b (f n) d -> b f n d', n=V + 1)
-        frame_sz = attn_out.size(1)
-        x0 = attn_out[:, :, :V, :].reshape(x0.shape[0], frame_sz * V, -1)
-        x1 = attn_out[:, :, V:, :].reshape(x0.shape[0], frame_sz, -1)
+        x0, x1 = eo.rearrange(attn_out, 'b (f n) d -> b f n d', n=V + 1).split([V, 1], dim=2)
+        x0, x1 = x0.flatten(0, 1), x1.flatten(0, 1)
 
-        x0, x1 = self.out_projs[0](x0).contiguous(), self.out_projs[1](x1).contiguous()
+        x0 = self.out_projs[0](x0).contiguous()
+        x1 = self.out_projs[1](x1).contiguous()
+
         return x0, x1
 
 
