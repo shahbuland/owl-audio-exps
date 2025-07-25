@@ -75,7 +75,10 @@ class WindowedViewDataset(Dataset):
 
 
 def collate_fn(batch):
-    stacked = {k: torch.stack([item[k] for item in batch]) for k in batch[0]}
+    stacked = {
+        k: torch.nan_to_num(torch.stack([item[k] for item in batch]), nan=0.0)  # TODO: preprocessing step instead
+        for k in batch[0]
+    }
     return [stacked[k] for k in ("latent", "audio", "mouse", "buttons")]
 
 
