@@ -79,6 +79,11 @@ def collate_fn(batch):
         k: torch.nan_to_num(torch.stack([item[k] for item in batch]), nan=0.0)  # TODO: preprocessing step instead
         for k in batch[0]
     }
+
+    # TODO: do this as a dataset preprocessing step instead
+    stacked["latent"] = torch.nan_to_num(stacked["latent"], nan=0.0)
+    stacked["latent"] = torch.clamp(stacked["latent"], -8, 8)
+
     return [stacked[k] for k in ("latent", "audio", "mouse", "buttons")]
 
 
