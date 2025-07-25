@@ -17,7 +17,7 @@ from einops._torch_specific import allow_ops_in_compiled_graph
 allow_ops_in_compiled_graph()
 
 
-flex_attention = torch.compile(flex_attention, dynamic=True)
+flex_attention = torch.compile(flex_attention)
 
 """
 This code makes the assumption that there are some
@@ -106,7 +106,7 @@ class MMAttn(nn.Module):
             k = torch.cat([k1,k2],dim=-2)
             v = torch.cat([v1,v2],dim=-2)
 
-            x = F.scaled_dot_product_attention(q,k,v, attn_mask = block_mask)
+            x = flex_attention(q, k, v, block_mask=block_mask)
             x = self.merge(x)
 
         x_1, x_2 = x[:,:n1], x[:,n1:]
