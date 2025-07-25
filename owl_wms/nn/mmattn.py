@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .normalization import QKNorm
+from .normalization import rms_norm
 from .mlp import MLP
 
 import einops as eo
@@ -37,7 +37,6 @@ class MMAttn(nn.Module):
 
         self.qkv_projs = nn.ModuleList([nn.Linear(config.d_model, 3 * config.d_model) for _ in range(2)])
         self.out_projs = nn.ModuleList([nn.Linear(config.d_model, config.d_model)for _ in range(2)])
-        self.qk_norms = nn.ModuleList([QKNorm(config.d_model // self.n_heads) for _ in range(2)])
         self.rope = AVRoPE(config)
 
     def split(self, qkv):
@@ -56,8 +55,7 @@ class MMAttn(nn.Module):
         qs, ks, vs = [], [], []
         for i, x in enumerate([x0, x1]):
             q, k, v = self.split(self.qkv_projs[i](x))
-            q, k = self.qk_norms[i](q, k)
-            q, k = q.type_as(v), k.type_as(v)
+            q, k = rms_norm(q), rms_norm(k)
 
             # prepend cached values
             offset = kv_cache[i].length_at(self.layer_ind) if kv_cache is not None else 0
@@ -96,25 +94,20 @@ class MMDiTBlock(nn.Module):
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
         self.attn_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        #self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
-
         self.mlp_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        #self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
 
     def ada_mlp(self, x, cond, modality_idx):
-        res = x.clone()
+        res = x
         x = self.mlp_adalns[modality_idx](x, cond)
         x = self.mlps[modality_idx](x)
-        #x = self.mlp_gates[modality_idx](x, cond)
         x = x + res
         return x
 
     def forward(self, x0, x1, cond, block_mask=None, kv_cache=None):
         # Conditioned Attention
-        res_x0, res_x1 = x0.clone(), x1.clone()
+        res_x0, res_x1 = x0, x1
         x0, x1 = self.attn_adalns[0](x0, cond), self.attn_adalns[1](x1, cond)
         x0, x1 = self.attn(x0, x1, block_mask, kv_cache)
-        #x0, x1 = self.attn_gates[0](x0, cond), self.attn_gates[1](x1, cond)
         x0, x1 = (res_x0 + x0), (res_x1 + x1)
 
         # Conditioned MLP
