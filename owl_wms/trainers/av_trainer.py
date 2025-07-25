@@ -225,4 +225,4 @@ class AVRFTTrainer(BaseTrainer):
                         if self.rank == 0:
                             self.save()
 
-                    self.barrier()
+                    self.barrier(timeout_seconds=3600)

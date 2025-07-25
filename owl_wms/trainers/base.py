@@ -2,6 +2,7 @@
 Base class for any trainer
 """
 
+import datetime
 import torch
 import wandb
 import os
@@ -41,10 +42,14 @@ class BaseTrainer:
                     'model' : model_cfg
                 }
             )
-        
-    def barrier(self):
-        if self.world_size > 1:
+
+    def barrier(self, timeout_seconds=None):
+        if self.world_size <= 1:
+            return
+        elif timeout_seconds is None:
             dist.barrier()
+        else:
+            dist.monitored_barrier(datetime.timedelta(timeout_seconds))
 
     def get_module(self, ema = False):
         if self.world_size == 1:
