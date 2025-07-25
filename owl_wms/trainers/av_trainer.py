@@ -157,17 +157,15 @@ class AVRFTTrainer(BaseTrainer):
                 batch_vid = batch_vid / self.train_cfg.vae_scale
                 batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
-                print("batch shapes:", [(b.shape, b.device) for b in batch])
-
                 with ctx:
-                    print("model fwd on device=", next(self.model.parameters()).device)
-                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
-                    print("end fwd, loss.device=", loss.device)
+                    loss, video_loss, audio_loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn)
+                    loss = loss / accum_steps
 
                 self.scaler.scale(loss).backward()
-                print("end bwd")
 
                 metrics.log('diffusion_loss', loss)
+                metrics.log('video_loss', video_loss)
+                metrics.log('audio_loss', video_loss)
 
                 local_step += 1
                 if local_step % accum_steps == 0:
