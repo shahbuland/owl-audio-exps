@@ -82,7 +82,7 @@ class MMAttn(nn.Module):
 
         V = self.config.sample_size**2
         x0, x1 = eo.rearrange(attn_out, 'b (f n) d -> b f n d', n=V + 1).split([V, 1], dim=2)
-        x0, x1 = x0.flatten(0, 1), x1.flatten(0, 1)
+        x0, x1 = x0.flatten(1, 2), x1.flatten(1, 2)
 
         x0 = self.out_projs[0](x0).contiguous()
         x1 = self.out_projs[1](x1).contiguous()
