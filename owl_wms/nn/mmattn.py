@@ -34,52 +34,60 @@ class MMAttn(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
         self.n_heads = config.n_heads
+        self.tok_per_frame_mod = [self.config.sample_size ** 2, 1]
 
         self.qkv_projs = nn.ModuleList([nn.Linear(config.d_model, 3 * config.d_model) for _ in range(2)])
         self.out_projs = nn.ModuleList([nn.Linear(config.d_model, config.d_model)for _ in range(2)])
         self.rope = AVRoPE(config)
 
-    def split(self, qkv):
-        return eo.rearrange(qkv, 'b n (three h d) -> three b h n d', three=3, h=self.n_heads)
+    def split(self, qkv, n_tok):
+        return eo.rearrange(
+            qkv, 'b (f n) (three h d) -> three b h f n d', n=n_tok, three=3, h=self.n_heads
+        ).unbind(0)
 
-    def merge(self, x):
+    def merge(self, x):                           # heads → model dim
         return eo.rearrange(x, 'b h n d -> b n (h d)')
 
     def forward(self, x0, x1, block_mask=None, kv_cache=None):
         """
         For MMDiT we assume kv_cache is a tuple of two caches
         """
-        n1 = x0.shape[1]
-
         # calculate qs, ks, vs for each modality, and update kv cache
         qs, ks, vs = [], [], []
         for i, x in enumerate([x0, x1]):
-            q, k, v = self.split(self.qkv_projs[i](x))
+            q, k, v = self.split(self.qkv_projs[i](x), self.tok_per_frame_mod[i])
             q, k = rms_norm(q), rms_norm(k)
 
             # prepend cached values
-            offset = kv_cache[i].length_at(self.layer_ind) if kv_cache is not None else 0
+            offset = kv_cache[i].length_at(self.layer_idx) if kv_cache is not None else 0
             if offset > 0:
-                old_k, old_v = kv_cache[i].get(self.layer_ind)
+                old_k, old_v = kv_cache[i].get(self.layer_idx)
                 k = torch.cat([old_k, k], dim=2)
                 v = torch.cat([old_v, v], dim=2)
 
             # update cache
             if kv_cache is not None and kv_cache.should_update:
-                kv_cache[i].update(k.clone(), v.clone(), self.layer_ind)
+                kv_cache[i].update(k.clone(), v.clone(), self.layer_idx)
 
             qs.append(q)
             ks.append(k)
             vs.append(v)
 
-        qs, ks, vs = torch.cat(qs, dim=-2), torch.cat(ks, dim=-2), torch.cat(vs, dim=-2)
+        # interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]
+        qs = eo.rearrange(torch.cat(qs, dim=4), 'b h f n d -> b h (f n) d')
+        ks = eo.rearrange(torch.cat(ks, dim=4), 'b h f n d -> b h (f n) d')
+        vs = eo.rearrange(torch.cat(vs, dim=4), 'b h f n d -> b h (f n) d')
 
-        qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)
-
+        qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)  # TODO: offset only from 2nd modality, fix
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
         attn_out = self.merge(attn_out)
 
-        x0, x1 = attn_out[:, :n1], attn_out[:, n1:]
+        V = self.config.sample_size**2
+        attn_out = eo.rearrange(attn_out, 'b (f n) d -> b f n d', n=V + 1)
+        frame_sz = attn_out.size(1)
+        x0 = attn_out[:, :, :V, :].reshape(x0.shape[0], frame_sz * V, -1)
+        x1 = attn_out[:, :, V:, :].reshape(x0.shape[0], frame_sz, -1)
+
         x0, x1 = self.out_projs[0](x0).contiguous(), self.out_projs[1](x1).contiguous()
         return x0, x1
 
