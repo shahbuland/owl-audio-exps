@@ -87,12 +87,12 @@ class MMAttn(nn.Module):
 
 
 class MMDiTBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
 
         dim = config.d_model
 
-        self.attn = MMAttn(config)
+        self.attn = MMAttn(config, layer_idx)
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
         # Stream 1 - AdaLN and gating
