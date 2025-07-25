@@ -67,13 +67,17 @@ class WindowedViewDataset(Dataset):
         return len(self._index)
 
     def __getitem__(self, idx):
-        print(idx)
+        import time
+        tstart = time.time()
         row, start = self._index[idx]
         item = self.dataset[row]
-        return {
+        res = {
             col: torch.from_numpy(item[col][start: start + self.window_length])
             for col in self.columns
         }
+        print("get sample time", time.time() - tstart)
+        return res
+
 
 
 def collate_fn(batch):
