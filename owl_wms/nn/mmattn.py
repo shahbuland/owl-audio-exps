@@ -52,9 +52,8 @@ class MMAttn(nn.Module):
             self.split_qkv(self.qkv_projs[i](x), self.tok_per_frame_mod[i]).unbind(0)
             for i, x in enumerate([x0, x1])
         ]
-        # concat along tokens-per-frame of [(b, h, f, 64, d), (b, h, f, 1, d)]
-        q, k, v = [torch.cat(groups, dim=3) for groups in zip(*qkvs)]  # concat modalities
-        # interleave video/audio tokens: [vid_toks_frame_0, aud_tok_from_0, vid_toks_frame_1, ...]
+        # concat along tok-per-frame of [(b, h, f, 64, d), (b, h, f, 1, d)] and flatten to interleave modalities
+        q, k, v = [torch.cat(groups, dim=3) for groups in zip(*qkvs)]
         q, k, v = [eo.rearrange(x, 'b h f n d -> b h (f n) d') for x in [q, k, v]]
 
         q, k = rms_norm(q), rms_norm(k)

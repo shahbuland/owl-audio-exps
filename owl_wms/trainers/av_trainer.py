@@ -189,7 +189,10 @@ class AVRFTTrainer(BaseTrainer):
                         timer.reset()
 
                         # Sampling commented out for now
-                        if self.total_step_counter % self.train_cfg.sample_interval == 0 and self.rank == 0:
+                        if (self.total_step_counter != 0 and
+                            self.total_step_counter % self.train_cfg.sample_interval == 0 and
+                            self.rank == 0
+                        ):
                             with ctx, torch.no_grad():
 
                                 vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
