@@ -74,7 +74,7 @@ class WindowedViewDataset(Dataset):
         for col in self.columns:
             list_scalar = self.arrow_table[col][row_idx]
             window_view = list_scalar.values.slice(start_frame, self.window_length)
-            numpy_slice = window_view.to_numpy(zero_copy_only=False)
+            numpy_slice = window_view.values.to_numpy(zero_copy_only=False)
             res[col] = torch.from_numpy(numpy_slice)
 
         print("get sample time", time.time() - tstart)
