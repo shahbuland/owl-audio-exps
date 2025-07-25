@@ -12,7 +12,7 @@ class AutoEpochDistributedSampler(DistributedSampler):
     """Ensure we shuffle every epoch"""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._auto_epoch = 0
+        self._auto_epoch = -1
 
     def __iter__(self):
         self.set_epoch(self._auto_epoch)

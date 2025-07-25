@@ -74,6 +74,7 @@ class MMAttn(nn.Module):
             vs.append(v)
 
         qs, ks, vs = torch.cat(qs, dim=-2), torch.cat(ks, dim=-2), torch.cat(vs, dim=-2)
+
         qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)
 
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
