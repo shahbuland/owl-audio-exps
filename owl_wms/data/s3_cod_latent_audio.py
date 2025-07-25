@@ -44,9 +44,9 @@ class WindowedViewDataset(Dataset):
             keep_in_memory=False
         )
 
-        seq_len = self.dataset.column("seq_len").to_pylist()
-        missing = self.dataset.column("missing").to_pylist()
-        truncated = self.dataset.column("truncated").to_pylist()
+        seq_len = self.dataset.data["seq_len"].to_pylist()
+        missing = self.dataset.data["missing"].to_pylist()
+        truncated = self.dataset.data["truncated"].to_pylist()
 
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
         self.dataset.set_format(type="numpy", columns=self.columns)
