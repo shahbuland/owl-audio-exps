@@ -2,13 +2,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .normalization import LayerNorm
+from .normalization import LayerNorm, rms_norm
 
 class AdaLN(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.fc = nn.Linear(dim, 2 * dim)
-        self.norm = LayerNorm(dim)
 
     def forward(self, x, cond):
         # cond: [b, n, d], x: [b, n*m, d]
@@ -23,7 +22,7 @@ class AdaLN(nn.Module):
         ab = ab.reshape(b, nm, 2*d)        # [b, nm, 2d]
 
         a, b_ = ab.chunk(2, dim=-1)        # [b, nm, d] each
-        x = (self.norm(x) * (1 + a) + b_).type_as(x)
+        x = rms_norm(x) * (1 + a) + b_
         return x
 
 class Gate(nn.Module):

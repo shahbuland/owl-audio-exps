@@ -4,6 +4,11 @@ import torch.nn.functional as F
 
 import einops as eo
 
+
+def rms_norm(x: torch.Tensor) -> torch.Tensor:
+    return F.rms_norm(x, (x.size(-1),))
+
+
 class RMSNorm(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -31,11 +36,8 @@ class QKNorm(nn.Module):
     def __init__(self, dim):
         super().__init__()
 
-        self.q_norm = RMSNorm(dim)
-        self.k_norm = RMSNorm(dim)
-
     def forward(self, q, k):
-        return self.q_norm(q), self.k_norm(k)
+        return rms_norm(q), rms_norm(k)
 
 def LayerNorm(dim):
     return nn.LayerNorm(dim, elementwise_affine = False)
