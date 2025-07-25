@@ -29,7 +29,7 @@ class MMAttn(nn.Module):
     """
     MMDiT style attention
     """
-    def __init__(self, config : 'TransformerConfig'):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         self.n_heads = config.n_heads
@@ -51,6 +51,7 @@ class MMAttn(nn.Module):
         """
         n1 = x_1.shape[1]
 
+        # calculate qs, ks, vs for each modality, and update kv cache
         qs, ks, vs = [], [], []
         for i, x in enumerate([x_1, x_2]):
             q, k, v = self.split(self.qkv_projs[i](x))
@@ -69,7 +70,7 @@ class MMAttn(nn.Module):
 
             # update cache
             if kv_cache is not None and kv_cache.should_update:
-                kv_cache.update(k.clone(), v.clone(), self.layer_ind)
+                kv_cache[i].update(k.clone(), v.clone(), self.layer_ind)
 
             qs.append(q)
             ks.append(k)
@@ -81,7 +82,7 @@ class MMAttn(nn.Module):
         attn_out = self.merge(attn_out)
 
         x_1, x_2 = attn_out[:, :n1], attn_out[:, n1:]
-        x_1, x_2 = self.out_projs[0](x_1).contiguous(), self.outs_projs[1](x_1).contiguous()
+        x_1, x_2 = self.out_projs[0](x_1).contiguous(), self.outs_projs[1](x_2).contiguous()
         return x_1, x_2
 
 
