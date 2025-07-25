@@ -29,9 +29,10 @@ class MMAttn(nn.Module):
     """
     MMDiT style attention
     """
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
         self.config = config
+        self.layer_idx = layer_idx
         self.n_heads = config.n_heads
 
         self.qkv_projs = nn.ModuleList([nn.Linear(config.d_model, 3 * config.d_model) for _ in range(2)])
@@ -45,15 +46,15 @@ class MMAttn(nn.Module):
     def merge(self, x):
         return eo.rearrange(x, 'b h n d -> b n (h d)')
 
-    def forward(self, x_1, x_2, block_mask=None, kv_cache=None):
+    def forward(self, x0, x1, block_mask=None, kv_cache=None):
         """
         For MMDiT we assume kv_cache is a tuple of two caches
         """
-        n1 = x_1.shape[1]
+        n1 = x0.shape[1]
 
         # calculate qs, ks, vs for each modality, and update kv cache
         qs, ks, vs = [], [], []
-        for i, x in enumerate([x_1, x_2]):
+        for i, x in enumerate([x0, x1]):
             q, k, v = self.split(self.qkv_projs[i](x))
             q, k = self.qk_norms[i](q, k)
             q, k = q.type_as(v), k.type_as(v)
@@ -80,9 +81,9 @@ class MMAttn(nn.Module):
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
         attn_out = self.merge(attn_out)
 
-        x_1, x_2 = attn_out[:, :n1], attn_out[:, n1:]
-        x_1, x_2 = self.out_projs[0](x_1).contiguous(), self.out_projs[1](x_2).contiguous()
-        return x_1, x_2
+        x0, x1 = attn_out[:, :n1], attn_out[:, n1:]
+        x0, x1 = self.out_projs[0](x0).contiguous(), self.out_projs[1](x1).contiguous()
+        return x0, x1
 
 
 class MMDiTBlock(nn.Module):
@@ -106,7 +107,7 @@ class MMDiTBlock(nn.Module):
         self.adaln2_2 = AdaLN(dim)
         self.gate2_2 = Gate(dim)
 
-    def forward(self, x0, x1, cond, block_mask = None, kv_cache = None):
+    def forward(self, x0, x1, cond, block_mask=None, kv_cache=None):
         # Conditioned Attention
         res_x0, res_x1 = x0.clone(), x1.clone()
         x0, x1 = self.adaln1_1(x0, cond), self.adaln1_2(x1, cond)
@@ -117,7 +118,7 @@ class MMDiTBlock(nn.Module):
         # Conditioned MLP
         res_x0, res_x1 = x0.clone(), x1.clone()
         x0, x1 = self.adaln2_1(x0, cond), self.adaln2_2(x1, cond)
-        x0, x1 = self.mlp_1(x0), self.mlp_2(x1)
+        x0, x1 = self.mlps[0](x0), self.mlps[1](x1)
         x0, x1 = self.gate2_1(x0, cond), self.gate2_2(x1, cond)
         x0, x1 = (res_x0 + x0), (res_x1 + x1)
 
@@ -127,30 +128,27 @@ class MMDiTBlock(nn.Module):
 class MMDIT(nn.Module):
     def __init__(self, config):
         super().__init__()
-
         self.config = config
-        self.blocks = nn.ModuleList([MMDiTBlock(config) for _ in range(config.n_layers)])
+        self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
-        for i in range(config.n_layers):
-            self.blocks[i].attn.layer_ind = i
-
-    def get_block_mask(self, x, y, kv_cache):
+    def get_block_mask(self, x0, x1, kv_cache):
         if not self.config.causal:
             return None
-        seq_len = x.shape[1] + y.shape[1]
+        seq_len = x0.shape[1] + x1.shape[1]
         offset = kv_cache.length_at(0) if kv_cache is not None else 0
         return create_causal_block_mask(
             n_tokens=seq_len + offset,
             tokens_per_frame=self.config.tokens_per_frame,
             n_cached_tokens=offset,
-            device=x.device
+            device=x0.device
         )
 
-    def forward(self, x, y, cond, kv_cache = None):
-        block_mask = self.get_block_mask(x, y, kv_cache)
+    def forward(self, x0, x1, cond, kv_cache=None):
+        block_mask = self.get_block_mask(x0, x1, kv_cache)
         for block in self.blocks:
-            x,y = block(x, y, cond, block_mask, kv_cache)
-        return x,y
+            x0, x1 = block(x0, x1, cond, block_mask, kv_cache)
+        return x0, x1
+
 
 def test_fwd_with_cache():
     from ..configs import TransformerConfig
