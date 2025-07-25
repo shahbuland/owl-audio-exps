@@ -67,6 +67,7 @@ class WindowedViewDataset(Dataset):
         return len(self._index)
 
     def __getitem__(self, idx):
+        print(idx)
         row, start = self._index[idx]
         item = self.dataset[row]
         return {
