@@ -24,6 +24,7 @@ def checkpoint(function, *args, **kwargs):
 
 
 def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, n_cached_tokens: int = 0, device="cpu"):
+    print(f"create_causal_block_mask(n_tokens={n_tokens}, tokens_per_frame={tokens_per_frame}, n_cached_tokens={n_cached_tokens}")
     # Build n_tokens X n_tokens BlockMask which is causal and disallows wrapping
     assert 0 <= n_cached_tokens < n_tokens, "kv cache cannot exceept total tokens"
 
