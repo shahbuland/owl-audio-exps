@@ -49,6 +49,11 @@ class WindowedViewDataset(Dataset):
         truncated = self.dataset.data["truncated"].to_pylist()
 
         self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
+
+        self.dataset.set_format(type="torch", columns=self.columns)
+        first_row = self.dataset[0]
+        self.frame_shapes = {col: first_row[col].shape[1:] for col in self.columns}
+
         self.dataset.set_format(None)
 
         # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
@@ -82,8 +87,8 @@ class WindowedViewDataset(Dataset):
             window_arr  = frame_arr.slice(start, self.window_length)
 
             flat  = window_arr.values.to_numpy(zero_copy_only=True)
-            D     = window_arr.type.list_size
-            return torch.from_numpy(flat.reshape(-1, D))
+            inner = self.frame_shapes[col]            # e.g. (c,h,w)
+            return torch.from_numpy(flat.reshape(-1, *inner))
 
         res = {col: slice_to_tensor(col) for col in self.columns}
         print("get sample time", time.time() - tstart)
