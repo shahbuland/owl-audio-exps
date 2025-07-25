@@ -81,7 +81,7 @@ class MMAttn(nn.Module):
         attn_out = self.merge(attn_out)
 
         x_1, x_2 = attn_out[:, :n1], attn_out[:, n1:]
-        x_1, x_2 = self.out_projs[0](x_1).contiguous(), self.outs_projs[1](x_2).contiguous()
+        x_1, x_2 = self.out_projs[0](x_1).contiguous(), self.out_projs[1](x_2).contiguous()
         return x_1, x_2
 
 
@@ -92,9 +92,7 @@ class MMDiTBlock(nn.Module):
         dim = config.d_model
 
         self.attn = MMAttn(config)
-
-        self.mlp_1 = MLP(config)
-        self.mlp_2 = MLP(config)
+        self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
         # Stream 1 - AdaLN and gating
         self.adaln1_1 = AdaLN(dim)
@@ -108,40 +106,23 @@ class MMDiTBlock(nn.Module):
         self.adaln2_2 = AdaLN(dim)
         self.gate2_2 = Gate(dim)
 
-    @torch.compile
-    def forward(self, x, y, cond, block_mask = None, kv_cache = None):
-        res1_x = x.clone()
-        res1_y = y.clone()
+    def forward(self, x0, x1, cond, block_mask = None, kv_cache = None):
+        # Conditioned Attention
+        res_x0, res_x1 = x0.clone(), x1.clone()
+        x0, x1 = self.adaln1_1(x0, cond), self.adaln1_2(x1, cond)
+        x0, x1 = self.attn(x0, x1, block_mask, kv_cache)
+        x0, x1 = self.gate1_1(x0, cond), self.gate1_2(x1, cond)
+        x0, x1 = (res_x0 + x0), (res_x1 + x1)
 
-        # First attention block
-        x = self.adaln1_1(x, cond)
-        y = self.adaln1_2(y, cond)
+        # Conditioned MLP
+        res_x0, res_x1 = x0.clone(), x1.clone()
+        x0, x1 = self.adaln2_1(x0, cond), self.adaln2_2(x1, cond)
+        x0, x1 = self.mlp_1(x0), self.mlp_2(x1)
+        x0, x1 = self.gate2_1(x0, cond), self.gate2_2(x1, cond)
+        x0, x1 = (res_x0 + x0), (res_x1 + x1)
 
-        x, y = self.attn(x, y, block_mask, kv_cache)
+        return x0, x1
 
-        x = self.gate1_1(x, cond)
-        y = self.gate1_2(y, cond)
-
-        x = res1_x + x
-        y = res1_y + y
-
-        # Second MLP block
-        res2_x = x.clone()
-        res2_y = y.clone()
-
-        x = self.adaln2_1(x, cond)
-        y = self.adaln2_2(y, cond)
-
-        x = self.mlp_1(x)
-        y = self.mlp_2(y)
-
-        x = self.gate2_1(x, cond)
-        y = self.gate2_2(y, cond)
-
-        x = res2_x + x
-        y = res2_y + y
-
-        return x, y
 
 class MMDIT(nn.Module):
     def __init__(self, config):
