@@ -23,25 +23,24 @@ class AutoEpochDistributedSampler(DistributedSampler):
 
 
 class WindowedViewDataset(Dataset):
-    """Construct (row_idx, start) index over a hf dataset"""
-    def __init__(
-            self,
-            dataset_path: str,
-            window_length: int,
-            split="train",
-            include_missing_features: bool = False,
-            include_truncated: bool = True,
-            meta_cols=("tarball", "pt_idx", "missing", "truncated", "seq_len"),
+    """Construct (row_idx, start) index over a hf dataset."""
 
+    def __init__(
+        self,
+        dataset_path: str,
+        window_length: int,
+        split="train",
+        include_missing_features: bool = False,
+        include_truncated: bool = True,
+        meta_cols=("tarball", "pt_idx", "missing", "truncated", "seq_len"),
     ):
         self.window_length = window_length
 
-        # load the dataset and convert feature columns to torch
         dataset = load_dataset(
             "parquet",
             data_files=f"{dataset_path}/*.parquet",
             split=split,
-            keep_in_memory=False
+            keep_in_memory=False,
         )
         self.arrow_table = dataset.data
 
@@ -51,7 +50,6 @@ class WindowedViewDataset(Dataset):
 
         self.columns = [c for c in dataset.column_names if c not in meta_cols]
 
-        # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         index = []
         for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing, truncated)):
             if (not include_missing_features) and is_missing:
@@ -63,24 +61,39 @@ class WindowedViewDataset(Dataset):
 
         self._index = index
 
+        # Pre-calculate inner shapes once to avoid redundant work in __getitem__
+        self.inner_shapes = {}
+        if self._index:
+            first_valid_row_idx = self._index[0][0]
+            for col in self.columns:
+                example_scalar = self.arrow_table[col][first_valid_row_idx]
+                if len(example_scalar.values) > 0:
+                    self.inner_shapes[col] = example_scalar.values[0].as_py().shape
+
     def __len__(self):
         return len(self._index)
 
     def __getitem__(self, idx):
         import time
         tstart = time.time()
+
         row_idx, start_frame = self._index[idx]
         res = {}
         for col in self.columns:
             list_scalar = self.arrow_table[col][row_idx]
             window_view = list_scalar.values.slice(start_frame, self.window_length)
-            numpy_slice = window_view.values.to_numpy(zero_copy_only=False)
-            res[col] = torch.from_numpy(numpy_slice)
 
+            # Flatten to a 1D buffer, convert to numpy, then reshape to the correct
+            # multi-dimensional shape. This avoids creating an array of dtype=object.
+            numpy_flat = window_view.flatten().to_numpy(zero_copy_only=False)
+
+            inner_shape = self.inner_shapes[col]
+            target_shape = (self.window_length, *inner_shape)
+            numpy_slice = numpy_flat.reshape(target_shape)
+
+            res[col] = torch.from_numpy(numpy_slice)
         print("get sample time", time.time() - tstart)
         return res
-
-
 
 def collate_fn(batch):
     stacked = {k: torch.stack([item[k] for item in batch]) for k in batch[0]}
