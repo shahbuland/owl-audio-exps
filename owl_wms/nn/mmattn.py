@@ -73,7 +73,8 @@ class MMAttn(nn.Module):
             ks.append(k)
             vs.append(v)
 
-        qs, ks, vs = [self.interleave(torch.cat(x, dim=4)) for x in [qs, ks, vs]]
+        # concat along `f` of [(b, h, f, 64, d), (b, h, f, 1, d)]
+        qs, ks, vs = [self.interleave(torch.cat(x, dim=3)) for x in [qs, ks, vs]]
 
         qs, ks = self.rope(qs, offset=offset), self.rope(ks, offset=offset)  # TODO: offset only from 2nd modality, fix
         attn_out = flex_attention(qs, ks, vs, block_mask=block_mask)
