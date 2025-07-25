@@ -1,5 +1,6 @@
 from datasets import load_dataset
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler, Dataset
@@ -68,7 +69,8 @@ class WindowedViewDataset(Dataset):
             for col in self.columns:
                 example_scalar = self.arrow_table[col][first_valid_row_idx]
                 if len(example_scalar.values) > 0:
-                    self.inner_shapes[col] = example_scalar.values[0].as_py().shape
+                    self.inner_shapes[col] = np.array(example_scalar.values[0].as_py()).shape
+
 
     def __len__(self):
         return len(self._index)
