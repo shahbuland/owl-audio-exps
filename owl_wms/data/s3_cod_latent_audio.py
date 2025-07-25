@@ -12,13 +12,11 @@ class AutoEpochDistributedSampler(DistributedSampler):
     """Ensure we shuffle every epoch"""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._auto_epoch = -1
+        self._auto_epoch = 0
 
     def __iter__(self):
         self.set_epoch(self._auto_epoch)
         self._auto_epoch += 1
-        if (not dist.is_initialized()) or dist.get_rank() == 0:
-            print(f"Epoch: {self._auto_epoch}")
         return super().__iter__()
 
 
@@ -67,15 +65,12 @@ class WindowedViewDataset(Dataset):
         return len(self._index)
 
     def __getitem__(self, idx):
-        import time
-        tstart = time.time()
         row, start = self._index[idx]
         item = self.dataset[row]
         res = {
             col: item[col][start: start + self.window_length]
             for col in self.columns
         }
-        print("get sample time", time.time() - tstart)
         return res
 
 
@@ -103,6 +98,6 @@ def get_loader(batch_size, dataset_path, window_length):
         num_workers=4,
         drop_last=True,
         pin_memory=True,
-        prefetch_factor=2,
+        prefetch_factor=8,
         **loader_kwargs
     )
