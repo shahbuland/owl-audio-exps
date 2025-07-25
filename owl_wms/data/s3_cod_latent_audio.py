@@ -70,23 +70,20 @@ class WindowedViewDataset(Dataset):
         import time
         tstart = time.time()
         row, start = self._index[idx]
-        col_data = self.dataset.data
+        col_data = self.dataset.data  # Arrow table
+
         def slice_to_tensor(col):
             """
             Arrow List<FixedSizeList>  →  torch.Tensor(window_len, D)
-            using zero‑copy where possible.
+            Zero‑copy Arrow→NumPy; no chunk arithmetic needed.
             """
-            arr       = col_data[col]                     # ListArray
-            offsets   = arr.offsets.to_numpy(zero_copy_only=True)
-            begin     = offsets[row] + start
-            # FixedSizeListArray of length=window_len
-            window    = arr.values.slice(begin, self.window_length)
-            flat      = window.values.to_numpy()          # 1‑D view
-            D         = window.type.list_size
-            tensor    = torch.from_numpy(flat.reshape(-1, D))
-            if tensor.dtype == torch.float64:             # PyArrow → float64 fallback
-                tensor = tensor.float()
-            return tensor
+            list_scalar = col_data[col][row]        # pyarrow.ListScalar
+            frame_arr   = list_scalar.value         # FixedSizeListArray (seq_len frames)
+            window_arr  = frame_arr.slice(start, self.window_length)
+
+            flat  = window_arr.values.to_numpy(zero_copy_only=True)
+            D     = window_arr.type.list_size
+            return torch.from_numpy(flat.reshape(-1, D))
 
         res = {col: slice_to_tensor(col) for col in self.columns}
         print("get sample time", time.time() - tstart)
