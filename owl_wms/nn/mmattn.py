@@ -98,10 +98,10 @@ class MMDiTBlock(nn.Module):
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
         self.attn_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        #self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
+        self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
 
         self.mlp_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        #self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
+        self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
 
     def ada_mlp(self, x, cond, modality_idx):
         res = x
@@ -131,7 +131,6 @@ class MMDIT(nn.Module):
         self.config = config
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
-        """
         # DiT-Air: Tie all AdaLN parameters in each layer to layer 0's weights
         # https://arxiv.org/html/2503.10618v2
         for blk in self.blocks[1:]:
@@ -139,7 +138,10 @@ class MMDIT(nn.Module):
                 adaln._parameters = ref_adaln._parameters
             for ref_adaln, adaln in zip(self.blocks[0].mlp_adalns, blk.mlp_adalns):
                 adaln._parameters = ref_adaln._parameters
-        """
+            for ref_gate, gate in zip(self.blocks[0].attn_gates, blk.attn_gates):
+                gate._parameters = ref_gate._parameters
+            for ref_gate, gate in zip(self.blocks[0].mlp_gates, blk.mlp_gates):
+                gate._parameters = ref_gate._parameters
 
     def get_block_mask(self, x0, x1, kv_cache):
         if not self.config.causal:
