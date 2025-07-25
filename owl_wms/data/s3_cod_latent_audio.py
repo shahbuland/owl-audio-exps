@@ -78,7 +78,7 @@ class WindowedViewDataset(Dataset):
             Zero‑copy Arrow→NumPy; no chunk arithmetic needed.
             """
             list_scalar = col_data[col][row]        # pyarrow.ListScalar
-            frame_arr   = list_scalar.value         # FixedSizeListArray (seq_len frames)
+            frame_arr   = list_scalar.values         # FixedSizeListArray (seq_len frames)
             window_arr  = frame_arr.slice(start, self.window_length)
 
             flat  = window_arr.values.to_numpy(zero_copy_only=True)
