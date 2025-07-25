@@ -98,16 +98,16 @@ class MMDiTBlock(nn.Module):
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
         self.attn_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
+        #self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
 
         self.mlp_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
+        #self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
 
     def ada_mlp(self, x, cond, modality_idx):
         res = x
         x = self.mlp_adalns[modality_idx](x, cond)
         x = self.mlps[modality_idx](x)
-        x = self.mlp_gates[modality_idx](x, cond)
+        #x = self.mlp_gates[modality_idx](x, cond)
         x = x + res
         return x
 
@@ -116,7 +116,7 @@ class MMDiTBlock(nn.Module):
         res_x0, res_x1 = x0, x1
         x0, x1 = self.attn_adalns[0](x0, cond), self.attn_adalns[1](x1, cond)
         x0, x1 = self.attn(x0, x1, block_mask, kv_cache)
-        x0, x1 = self.attn_gates[0](x0, cond), self.attn_gates[1](x1, cond)
+        #x0, x1 = self.attn_gates[0](x0, cond), self.attn_gates[1](x1, cond)
         x0, x1 = (res_x0 + x0), (res_x1 + x1)
 
         # Conditioned MLP
