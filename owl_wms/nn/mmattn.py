@@ -7,7 +7,7 @@ from .mlp import MLP
 
 import einops as eo
 
-from .modulation import AdaLN, Gate
+from .modulation import cond_adaln, cond_gate
 from .rope import AVRoPE
 from .attn import create_causal_block_mask
 
@@ -91,36 +91,29 @@ class MMAttn(nn.Module):
 class MMDiTBlock(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
-
-        dim = config.d_model
-
         self.attn = MMAttn(config, layer_idx)
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
-        self.attn_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        self.attn_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
+    def forward(self, x0, x1, cond_y, block_mask=None, kv_cache=None):
+        # Conditioning inputs
+        (
+            attn_scale0, attn_bias0, attn_scale1, attn_bias1, attn_gate0, attn_gate1,
+            mlp_scale0, mlp_bias0, mlp_scale1, mlp_bias1, mlp_gate0, mlp_gate1
+        ) = cond_y.chunk(12, dim=-1)
 
-        self.mlp_adalns = nn.ModuleList([AdaLN(dim) for _ in range(2)])
-        self.mlp_gates = nn.ModuleList([Gate(dim) for _ in range(2)])
-
-    def ada_mlp(self, x, cond, modality_idx):
-        res = x
-        x = self.mlp_adalns[modality_idx](x, cond)
-        x = self.mlps[modality_idx](x)
-        #x = self.mlp_gates[modality_idx](x, cond)
-        x = x + res
-        return x
-
-    def forward(self, x0, x1, cond, block_mask=None, kv_cache=None):
         # Conditioned Attention
-        res_x0, res_x1 = x0, x1
-        x0, x1 = self.attn_adalns[0](x0, cond), self.attn_adalns[1](x1, cond)
+        r0, r1 = x0, x1
+        x0, x1 = cond_adaln(x0, attn_scale0, attn_bias0), cond_adaln(x1, attn_scale1, attn_bias1)
         x0, x1 = self.attn(x0, x1, block_mask, kv_cache)
-        #x0, x1 = self.attn_gates[0](x0, cond), self.attn_gates[1](x1, cond)
-        x0, x1 = (res_x0 + x0), (res_x1 + x1)
+        x0, x1 = cond_gate(x0, attn_gate0), cond_gate(x1, attn_gate1)
+        x0, x1 = (r0 + x0), (r1 + x1)
 
         # Conditioned MLP
-        x0, x1 = self.ada_mlp(x0, cond, 0), self.ada_mlp(x1, cond, 1)
+        r0, r1 = x0, x1
+        x0, x1 = cond_adaln(x0, mlp_scale0, mlp_bias0), cond_adaln(x1, mlp_scale1, mlp_bias1)
+        x0, x1 = self.mlps[0](x0), self.mlps[1](x1)
+        x0, x1 = cond_gate(x0, mlp_gate0), cond_gate(x1, mlp_gate1)
+        x0, x1 = (r0 + x0), (r1 + x1)
 
         return x0, x1
 
@@ -131,17 +124,11 @@ class MMDIT(nn.Module):
         self.config = config
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
-        # DiT-Air: Tie all AdaLN parameters in each layer to layer 0's weights
-        # https://arxiv.org/html/2503.10618v2
-        for blk in self.blocks[1:]:
-            for ref_adaln, adaln in zip(self.blocks[0].attn_adalns, blk.attn_adalns):
-                adaln._parameters = ref_adaln._parameters
-            for ref_adaln, adaln in zip(self.blocks[0].mlp_adalns, blk.mlp_adalns):
-                adaln._parameters = ref_adaln._parameters
-            for ref_gate, gate in zip(self.blocks[0].attn_gates, blk.attn_gates):
-                gate._parameters = ref_gate._parameters
-            for ref_gate, gate in zip(self.blocks[0].mlp_gates, blk.mlp_gates):
-                gate._parameters = ref_gate._parameters
+        # DiT-Air
+        self.cond_proj = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(config.d_model, config.d_model * 2 * 2 * 3)
+        )
 
     def get_block_mask(self, x0, x1, kv_cache):
         if not self.config.causal:
@@ -157,8 +144,9 @@ class MMDIT(nn.Module):
 
     def forward(self, x0, x1, cond, kv_cache=None):
         block_mask = self.get_block_mask(x0, x1, kv_cache)
+        cond_y = self.cond_proj(cond)
         for block in self.blocks:
-            x0, x1 = block(x0, x1, cond, block_mask, kv_cache)
+            x0, x1 = block(x0, x1, cond_y, block_mask, kv_cache)
         return x0, x1
 
 
