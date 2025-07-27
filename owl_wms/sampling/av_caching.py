@@ -62,8 +62,8 @@ class AVCachingSampler:
         prev_mouse, prev_btn = mouse[:, :init_len], btn[:, :init_len]
 
         for idx in tqdm(range(self.num_frames), desc="Sampling frames"):
-            curr_mouse = mouse[:, init_len + idx: init_len + idx + 1]
-            curr_btn = btn[:, init_len + idx: init_len + idx + 1]
+            start = min(init_len + idx, mouse.size(1) - 1)
+            curr_mouse, curr_btn = mouse[:, start: start + 1], btn[:, start: start + 1]
 
             new_video, new_audio = self.denoise_frame(
                 model, kv_cache,
