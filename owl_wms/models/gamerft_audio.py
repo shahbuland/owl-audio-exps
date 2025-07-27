@@ -89,7 +89,8 @@ class GameRFTAudioCore(nn.Module):
         video = video.reshape(b, n, h, w, c).permute(0, 1, 4, 2, 3) # bnchw
 
         # Project audio tokens
-        audio = audio.squeeze(-2) # bnd
+        if audio.dim() == 4:
+            audio = audio.squeeze(-2)  # bnd
         audio = self.audio_proj_out(audio, cond)
 
         return video, audio
