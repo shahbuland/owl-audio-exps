@@ -30,9 +30,9 @@ class AVCachingSampler:
         only_return_generated: bool = False,
     ) -> None:
         if cfg_scale != 1.0:
-            raise ValueError("`cfg_scale` must be 1.0.")
-        if self.only_return_generated:
-            raise NotImplementedError
+            raise NotImplementedError("cfg_scale must be 1.0")
+        if only_return_generated:
+            raise NotImplementedError("only_return_generated must be False")
 
         self.n_steps = n_steps
         self.num_frames = num_frames
