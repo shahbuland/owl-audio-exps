@@ -140,7 +140,7 @@ class AVCachingSampler:
         for step in range(1, self.n_steps):
             eps_vid, eps_aud = model(
                 new_vid, new_aud, t_new,
-                curr_mouse[:, -1:], curr_btn[:, -1:],
+                curr_mouse[:, -2:], curr_btn[:, -2:],
                 kv_cache=kv_cache
             )
             new_vid -= eps_vid * dt[step]
