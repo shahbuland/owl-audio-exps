@@ -1,12 +1,9 @@
 import torch
 from tqdm import tqdm
 
-from ..utils import batch_permute_to_length
 from ..nn.kv_cache import KVCache
 
 from .schedulers import get_sd3_euler
-
-import torch.nn.functional as F ####
 
 
 def zlerp(x, alpha):
@@ -60,15 +57,13 @@ class AVCachingSampler:
         video_out = [] if self.only_return_generated else [video]
         audio_out = [] if self.only_return_generated else [audio]
 
-        extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, init_len + self.num_frames)
-
         # History for the first frame generation step = full clean clip
         prev_video, prev_audio = video, audio
-        prev_mouse, prev_btn = extended_mouse[:, :init_len], extended_btn[:, :init_len]
+        prev_mouse, prev_btn = mouse[:, :init_len], btn[:, :init_len]
 
         for idx in tqdm(range(self.num_frames), desc="Sampling frames"):
-            curr_mouse = extended_mouse[:, init_len + idx: init_len + idx + 1]
-            curr_btn = extended_btn[:, init_len + idx: init_len + idx + 1]
+            curr_mouse = mouse[:, init_len + idx: init_len + idx + 1]
+            curr_btn = btn[:, init_len + idx: init_len + idx + 1]
 
             new_video, new_audio = self.denoise_frame(
                 model, kv_cache,
@@ -90,7 +85,7 @@ class AVCachingSampler:
         if audio_decode_fn is not None:
             audio = audio_decode_fn(audio * audio_scale)
 
-        return video_out, audio_out, extended_mouse, extended_btn
+        return video_out, audio_out, mouse, btn
 
     def denoise_frame(
         self,
@@ -119,31 +114,27 @@ class AVCachingSampler:
 
         # update kv cache with previous uncached frames
         kv_cache.enable_cache_updates()
-        ctrl_mouse, ctrl_btn = batch_permute_to_length(
-            torch.cat([prev_mouse, curr_mouse], dim=1),
-            torch.cat([prev_btn, curr_btn], dim=1),
-            prev_mouse.size(1) + 2
-        )
-        single_mouse = F.pad(curr_mouse, (0, 0, 0, 1), mode="replicate")
-        single_btn   = F.pad(curr_btn,   (0, 0, 0, 1), mode="replicate")
         eps_v, eps_a = model(
             torch.cat([prev_vid, new_vid], dim=1),
             torch.cat([prev_aud, new_aud], dim=1),
             torch.cat([t_prev, t_new], dim=1),
-            single_mouse, single_btn,
+            torch.cat([prev_mouse, curr_mouse], dim=1),
+            torch.cat([prev_btn, curr_btn], dim=1),
             kv_cache=kv_cache,
         )
         kv_cache.disable_cache_updates()
         kv_cache.truncate(1, front=False)  # new "still-being-denoised" frame from kv cache
 
-        # Euler update for last frame
+        # Euler update for step‑0 (affects only the *last* frame)
         new_vid -= eps_v[:, -1:] * dt[0]
         new_aud -= eps_a[:, -1:] * dt[0]
         t_new -= dt[0]
 
-        # Remaining diffusion steps with cached history, denoising only the new frame
+        # Remaining diffusion steps with cached history, denoising denoising only new frame
         for step in range(1, self.n_steps):
-            eps_vid, eps_aud = model(new_vid, new_aud, t_new, curr_mouse, curr_btn, kv_cache=kv_cache)
+            eps_vid, eps_aud = model(
+                new_vid, new_aud, t_new, curr_mouse, curr_btn, kv_cache=kv_cache
+            )
             new_vid -= eps_vid * dt[step]
             new_aud -= eps_aud * dt[step]
             t_new -= dt[step]
