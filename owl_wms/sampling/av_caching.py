@@ -1,173 +1,131 @@
 import torch
-from torch import nn
-import torch.nn.functional as F
 from tqdm import tqdm
 
-from ..utils import batch_permute_to_length
 from ..nn.kv_cache import KVCache
+
+from .schedulers import get_sd3_euler
+
+
+def zlerp(x, alpha):
+    z = torch.randn_like(x)
+    return x * (1. - alpha) + z * alpha
+
 
 class AVCachingSampler:
     """
-    Caching sampler that uses KV cache to avoid recomputing attention for previous frames.
-    Samples new frames one by one, using cached keys/values from previous frames.
-
-    :param n_steps: Number of diffusion steps for each frame (default 4)
-    :param cfg_scale: CFG scale for each frame
+    Parameters
+    ----------
+    :param n_steps: Number of diffusion steps for each frame
+    :param cfg_scale: Must be 1.0
     :param num_frames: Number of new frames to sample
+    :param noise_prev: Noise previous frame
     :param only_return_generated: Whether to only return the generated frames
-    :param cache_after_denoise: Whether to cache clean frame after denoising (vs caching final noisy frame)
     """
-    def __init__(self, n_steps=4, num_frames=60, window_length = 60,only_return_generated=False):
+    def __init__(
+        self,
+        n_steps: int = 16,
+        cfg_scale: float = 1.0,
+        num_frames: int = 60,
+        noise_prev: float = 0.2,
+        only_return_generated: bool = False,
+    ) -> None:
+        if cfg_scale != 1.0:
+            raise ValueError("`cfg_scale` must be 1.0.")
         self.n_steps = n_steps
         self.num_frames = num_frames
+        self.noise_prev = noise_prev
         self.only_return_generated = only_return_generated
-        self.window_length = window_length
 
     @torch.no_grad()
-    def __call__(self, model, dummy_batch, audio, mouse, btn, decode_fn=None, audio_decode_fn=None, image_scale=1, audio_scale=1):
-        # Initialize outputs
-        clean_history = dummy_batch.clone()
-        clean_audio_history = audio.clone()
-        
-        # Get extended controls
-        extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, self.num_frames + dummy_batch.shape[1])
+    def __call__(self, model, video: torch.Tensor, audio: torch.Tensor, mouse: torch.Tensor, btn: torch.Tensor):
+        """Generate `num_frames` new frames and return updated tensors."""
+        batch_size, init_len = video.shape[:2]
 
-        # Initialize KV cache
+        dt = get_sd3_euler(self.n_steps).to(device=video.device, dtype=video.dtype)
+
         kv_cache = KVCache(model.config)
-        kv_cache.reset(dummy_batch.shape[0])
+        kv_cache.reset(batch_size)
 
-        # Cache context frames
+        video_out = [] if self.only_return_generated else [video]
+        audio_out = [] if self.only_return_generated else [audio]
+
+        # History for the first frame generation step = full clean clip
+        prev_video, prev_audio = video, audio
+        prev_mouse, prev_btn = mouse[:, :init_len], btn[:, :init_len]
+
+        for idx in tqdm(range(self.num_frames), desc="Sampling frames"):
+            curr_mouse = mouse[:, init_len + idx: init_len + idx + 1]
+            curr_btn = btn[:, init_len + idx: init_len + idx + 1]
+
+            new_video, new_audio = self.denoise_frame(
+                model, kv_cache,
+                prev_video, prev_audio, prev_mouse, prev_btn,
+                curr_mouse, curr_btn,
+                dt=dt,
+            )
+
+            video_out.append(new_video)
+            audio_out.append(new_audio)
+
+            # all history kv cached except for newly generated from
+            # set the previous states as the current states
+            prev_video, prev_audio = new_video, new_audio
+            prev_mouse, prev_btn = curr_mouse, curr_btn
+
+        return torch.cat(video_out, dim=1), torch.cat(audio_out, dim=1), mouse, btn
+
+    def denoise_frame(
+        self,
+        *,
+        model,
+        kv_cache: KVCache,
+        prev_video: torch.Tensor,
+        prev_audio: torch.Tensor,
+        prev_mouse: torch.Tensor,
+        prev_btn: torch.Tensor,
+        curr_mouse: torch.Tensor,
+        curr_btn: torch.Tensor,
+        dt: torch.Tensor,
+    ):
+        """Run all denoising steps for new frame"""
+        batch_size = prev_video.size(0)
+
+        # Partially re-noise history
+        prev_vid = zlerp(prev_video, self.noise_prev)
+        prev_aud = zlerp(prev_audio, self.noise_prev)
+        t_prev = prev_video.new_full((batch_size, prev_vid.size(1)), self.noise_prev)
+
+        # Create new pure-noise frame
+        new_vid = torch.randn_like(prev_video[:, :1])
+        new_aud = torch.randn_like(prev_audio[:, :1])
+        t_new = prev_video.new_ones(batch_size, 1)
+
+        # update kv cache with history
         kv_cache.enable_cache_updates()
-        ts = torch.zeros_like(clean_history[:,:,0,0,0])
-        _ = model(clean_history, clean_audio_history, ts, mouse, btn, kv_cache=kv_cache)
+        eps_v, eps_a = model(
+            torch.cat([prev_vid, new_vid], dim=1),
+            torch.cat([prev_aud, new_aud], dim=1),
+            torch.cat([t_prev, t_new], dim=1),
+            torch.cat([prev_mouse, curr_mouse], dim=1),
+            torch.cat([prev_btn, curr_btn], dim=1),
+            kv_cache=kv_cache,
+        )
         kv_cache.disable_cache_updates()
+        kv_cache.truncate(1, front=False)  # new "still-being-denoised" frame from kv cache
 
-        dt = 1. / self.n_steps
+        # Euler update for step‑0 (affects only the *last* frame)
+        new_vid -= eps_v[:, -1:] * dt[0]
+        new_aud -= eps_a[:, -1:] * dt[0]
+        t_new -= dt[0]
 
-        # Generate new frames
-        for frame_idx in tqdm(range(self.num_frames)):
-            # Initialize new frame with noise
-            new_frame = torch.randn_like(clean_history[:,0:1])
-            new_audio = torch.randn_like(clean_audio_history[:,0:1])
+        # Remaining diffusion steps with cached history, denoising denoising only new frame
+        for step in range(1, self.n_steps):
+            eps_vid, eps_aud = model(
+                new_vid, new_aud, t_new, curr_mouse, curr_btn, kv_cache=kv_cache
+            )
+            new_vid -= eps_vid * dt[step]
+            new_aud -= eps_aud * dt[step]
+            t_new -= dt[step]
 
-            curr_mouse = extended_mouse[:,frame_idx:frame_idx+1]
-            curr_btn = extended_btn[:,frame_idx:frame_idx+1]
-
-            b = new_frame.shape[0]
-            ts = torch.ones_like(new_frame[:,0,0,0,0]).unsqueeze(1)
-
-            if kv_cache.n_frames() >= self.window_length:
-                kv_cache.truncate(1, front=False)
-
-            # Denoise
-            for step in range(self.n_steps):
-                pred_video, pred_audio = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
-
-                # Update
-                new_frame = new_frame - pred_video * dt
-                new_audio = new_audio - pred_audio * dt
-                ts = ts - dt
-
-            # Cache clean frame with noise level 1.0
-            kv_cache.enable_cache_updates()
-            ts = torch.zeros_like(new_frame[:,0,0,0,0]).unsqueeze(1)
-            _ = model(new_frame, new_audio, ts, curr_mouse, curr_btn, kv_cache=kv_cache)
-            kv_cache.disable_cache_updates()
-
-            # Add to history
-            clean_history = torch.cat([clean_history, new_frame], dim=1)
-            clean_audio_history = torch.cat([clean_audio_history, new_audio], dim=1)
-
-        # Return only generated frames if specified
-        if self.only_return_generated:
-            clean_history = clean_history[:,-self.num_frames:]
-            clean_audio_history = clean_audio_history[:,-self.num_frames:]
-            extended_mouse = extended_mouse[:,-self.num_frames:]
-            extended_btn = extended_btn[:,-self.num_frames:]
-
-        # Decode if decoders provided
-        if decode_fn is not None:
-            clean_history = clean_history * image_scale
-            clean_history = decode_fn(clean_history)
-
-        if audio_decode_fn is not None:
-            clean_audio_history = clean_audio_history * audio_scale
-            clean_audio_history = audio_decode_fn(clean_audio_history)
-
-        return clean_history, clean_audio_history, extended_mouse, extended_btn
-
-class AVCachingOneStepSampler:
-    """
-    Same as above but distinctly one step.
-
-    :param num_frames: Number of new frames to sample
-    :param window_length: Number of frames in sliding window
-    :param only_return_generated: Whether to only return the generated frames
-    """
-    def __init__(self, num_frames=60, window_length = 60,only_return_generated=False):
-        self.num_frames = num_frames
-        self.only_return_generated = only_return_generated
-        self.window_length = window_length
-
-    @torch.no_grad()
-    def __call__(self, model, dummy_batch, audio, mouse, btn, decode_fn=None, audio_decode_fn=None, image_scale=1, audio_scale=1):
-        # Mostly identical to rollout manager
-        kv_cache = KVCache(model.config)
-        kv_cache.reset(dummy_batch.shape[0])
-
-        # === Prepare generation inputs ===
-        video = dummy_batch
-        context_frames = video.shape[1]
-        ext_mouse, ext_btn = batch_permute_to_length(mouse, btn, self.num_frames + context_frames)
-        rollout_mouse = ext_mouse[:,context_frames:]
-        rollout_btn = ext_btn[:,context_frames:]
-        ts = torch.zeros_like(video[:,:,0,0,0])
-
-        # === cache context frames ===
-        kv_cache.enable_cache_updates()
-        model(video, audio, ts, mouse, btn, kv_cache=kv_cache)
-        kv_cache.disable_cache_updates()
-
-        # === rollouts! ===
-        for frame_idx in tqdm(range(self.num_frames)):
-            # inputs for this frame
-            new_frame = torch.randn_like(video[:,0:1])
-            new_audio = torch.randn_like(audio[:,0:1])
-            new_mouse = rollout_mouse[:,frame_idx:frame_idx+1]
-            new_btn = rollout_btn[:,frame_idx:frame_idx+1]
-            ts = torch.ones_like(new_frame[:,0:1,0,0,0])
-
-            # Eject oldest frame
-            kv_cache.truncate(1, front=False)
-
-            # Denoise
-            pred_video, pred_audio = model(new_frame, new_audio, ts, new_mouse, new_btn, kv_cache=kv_cache)
-
-            # Update
-            new_frame = new_frame - pred_video
-            new_audio = new_audio - pred_audio
-
-            # Update cache
-            kv_cache.enable_cache_updates()
-            model(new_frame, new_audio, ts * 0.0, new_mouse, new_btn, kv_cache=kv_cache)
-            kv_cache.disable_cache_updates()
-
-            # Add to history
-            video = torch.cat([video, new_frame], dim=1)
-            audio = torch.cat([audio, new_audio], dim=1)
-        
-        if self.only_return_generated:
-            video = video[:,-self.num_frames:]
-            audio = audio[:,-self.num_frames:]
-            ext_mouse = ext_mouse[:,-self.num_frames:]
-            ext_btn = ext_btn[:,-self.num_frames:]
-        
-        if decode_fn is not None:
-            video = video * image_scale
-            video = decode_fn(video)
-        
-        if audio_decode_fn is not None:
-            audio = audio * audio_scale
-            audio = audio_decode_fn(audio)
-
-        return video, audio, ext_mouse, ext_btn
+        # Clean frame will be cached automatically in the *next* step‑0
+        return new_vid, new_aud

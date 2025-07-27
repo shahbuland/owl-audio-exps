@@ -121,10 +121,8 @@ class MMDIT(nn.Module):
         super().__init__()
         self.config = config
 
-        ####
-        self.local_window_len = 16
+        # layer attention pattern is [global, local, global, local, global, ...]
         self.local_layers = [((layer_idx + 1) % 2 == 0) for layer_idx in range(config.n_layers)]
-        ####
 
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
@@ -143,7 +141,7 @@ class MMDIT(nn.Module):
             n_tokens=seq_len + offset,
             tokens_per_frame=self.config.tokens_per_frame,
             n_cached_tokens=offset,
-            window_len=self.local_window_len if is_local else None,
+            window_len=self.config.local_window if is_local else self.config.global_window,
             device=x0.device
         )
 

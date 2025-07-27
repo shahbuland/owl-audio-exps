@@ -7,7 +7,7 @@ def get_sampler_cls(sampler_id):
         return AVWindowSampler
     elif sampler_id == "av_caching":
         """
-        Audio+Video sampler with strong caching, doesn't renoise previous frames. Caches clean frames. Will not work without special algorithm.
+        Audio+Video sampler with KV caching.
         """
         from .av_caching import AVCachingSampler
         return AVCachingSampler
@@ -23,9 +23,3 @@ def get_sampler_cls(sampler_id):
         """
         from .av_window import CausalAVWindowSamplerNoCFG
         return CausalAVWindowSamplerNoCFG
-    elif sampler_id == "av_caching_one_step":
-        """
-        Identical to av_caching but with a hard assumption for one step to simplify
-        """
-        from .av_caching import AVCachingOneStepSampler
-        return AVCachingOneStepSampler

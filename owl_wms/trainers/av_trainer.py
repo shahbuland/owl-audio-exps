@@ -189,14 +189,15 @@ class AVRFTTrainer(BaseTrainer):
                         timer.reset()
 
                         # Sampling commented out for now
-                        if (self.total_step_counter != 0 and
+                        if (#self.total_step_counter != 0 and
                             self.total_step_counter % self.train_cfg.sample_interval == 0 and
                             self.rank == 0
                         ):
                             with ctx, torch.no_grad():
 
                                 vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-                                n_samples = self.train_cfg.n_samples
+                                vid_for_sample = vid_for_sample[:, :self.train_cfg.sample_seed_frames]
+                                aud_for_sample = aud_for_sample[:, :self.train_cfg.sample_seed_frames]
                                 samples, audio, sample_mouse, sample_button = sampler(
                                     get_ema_core(),
                                     vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
