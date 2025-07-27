@@ -33,6 +33,6 @@ class MLP(MLPCustom):
 
     def forward(self, x):
         x = self.fc1(x)
-        x = F.relu(x).squre()
+        x = F.relu(x).square()
         x = self.fc2(x)
         return x
