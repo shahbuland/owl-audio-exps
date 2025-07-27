@@ -113,31 +113,35 @@ class AVCachingSampler:
         new_aud = torch.randn_like(prev_audio[:, :1])
         t_new = prev_video.new_ones(batch_size, 1)
 
-        # update kv cache with history
+        # update kv cache with previous uncached frames
         kv_cache.enable_cache_updates()
+        ctrl_mouse, ctrl_btn = batch_permute_to_length(
+            torch.cat([prev_mouse, curr_mouse], dim=1),
+            torch.cat([prev_btn, curr_btn], dim=1),
+            prev_mouse.size(1) + 1
+        )
         eps_v, eps_a = model(
             torch.cat([prev_vid, new_vid], dim=1),
             torch.cat([prev_aud, new_aud], dim=1),
             torch.cat([t_prev, t_new], dim=1),
-            *batch_permute_to_length(
-                torch.cat([prev_mouse, curr_mouse], dim=1),
-                torch.cat([prev_btn, curr_btn], dim=1),
-                prev_mouse.size(1) + 1
-            ),
+            ctrl_mouse,
+            ctrl_btn,
             kv_cache=kv_cache,
         )
         kv_cache.disable_cache_updates()
         kv_cache.truncate(1, front=False)  # new "still-being-denoised" frame from kv cache
 
-        # Euler update for step‑0 (affects only the *last* frame)
+        # Euler update for last frame
         new_vid -= eps_v[:, -1:] * dt[0]
         new_aud -= eps_a[:, -1:] * dt[0]
         t_new -= dt[0]
 
-        # Remaining diffusion steps with cached history, denoising denoising only new frame
+        # Remaining diffusion steps with cached history, denoising only the new frame
         for step in range(1, self.n_steps):
             eps_vid, eps_aud = model(
-                new_vid, new_aud, t_new, curr_mouse, curr_btn, kv_cache=kv_cache
+                new_vid, new_aud, t_new,
+                curr_mouse[:, -1:], curr_btn[:, -1:],
+                kv_cache=kv_cache
             )
             new_vid -= eps_vid * dt[step]
             new_aud -= eps_aud * dt[step]
