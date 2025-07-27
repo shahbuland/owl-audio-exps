@@ -31,13 +31,21 @@ class AVCachingSampler:
     ) -> None:
         if cfg_scale != 1.0:
             raise ValueError("`cfg_scale` must be 1.0.")
+        if self.only_return_generated:
+            raise NotImplementedError
+
         self.n_steps = n_steps
         self.num_frames = num_frames
         self.noise_prev = noise_prev
         self.only_return_generated = only_return_generated
 
     @torch.no_grad()
-    def __call__(self, model, video: torch.Tensor, audio: torch.Tensor, mouse: torch.Tensor, btn: torch.Tensor):
+    def __call__(
+            self,
+            model,
+            video: torch.Tensor, audio: torch.Tensor, mouse: torch.Tensor, btn: torch.Tensor,
+            decode_fn=None, audio_decode_fn=None, image_scale=1, audio_scale=1
+    ):
         """Generate `num_frames` new frames and return updated tensors."""
         batch_size, init_len = video.shape[:2]
 
@@ -67,12 +75,17 @@ class AVCachingSampler:
             video_out.append(new_video)
             audio_out.append(new_audio)
 
-            # all history kv cached except for newly generated from
-            # set the previous states as the current states
+            # all history kv cached except for newly generated from - set the previous as the new state
             prev_video, prev_audio = new_video, new_audio
             prev_mouse, prev_btn = curr_mouse, curr_btn
 
-        return torch.cat(video_out, dim=1), torch.cat(audio_out, dim=1), mouse, btn
+        video_out, audio_out = torch.cat(video_out, dim=1), torch.cat(audio_out, dim=1)
+        if decode_fn is not None:
+            video_out = decode_fn(video_out * image_scale)
+        if audio_decode_fn is not None:
+            audio = audio_decode_fn(audio * audio_scale)
+
+        return video_out, audio_out, mouse, btn
 
     def denoise_frame(
         self,
