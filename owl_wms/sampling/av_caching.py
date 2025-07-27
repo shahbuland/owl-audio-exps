@@ -89,7 +89,6 @@ class AVCachingSampler:
 
     def denoise_frame(
         self,
-        *,
         model,
         kv_cache: KVCache,
         prev_video: torch.Tensor,
