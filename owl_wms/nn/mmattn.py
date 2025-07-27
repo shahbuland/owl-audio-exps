@@ -94,12 +94,10 @@ class MMDiTBlock(nn.Module):
         self.attn = MMAttn(config, layer_idx)
         self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
 
-    def forward(self, x0, x1, cond_y, block_mask=None, kv_cache=None):
+    def forward(self, x0, x1, cond0, cond1, block_mask=None, kv_cache=None):
         # Conditioning inputs
-        (
-            attn_scale0, attn_bias0, attn_scale1, attn_bias1, attn_gate0, attn_gate1,
-            mlp_scale0, mlp_bias0, mlp_scale1, mlp_bias1, mlp_gate0, mlp_gate1
-        ) = cond_y.chunk(12, dim=-1)
+        attn_scale0, attn_bias0, attn_gate0, mlp_scale0, mlp_bias0, mlp_gate0 = cond0.chunk(6, dim=-1)
+        attn_scale1, attn_bias1, attn_gate1, mlp_scale1, mlp_bias1, mlp_gate1 = cond1.chunk(6, dim=-1)
 
         # Conditioned Attention
         r0, r1 = x0, x1
@@ -122,6 +120,12 @@ class MMDIT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+
+        ####
+        self.local_window_len = 16
+        self.local_layers = [((layer_idx + 1) % 2 == 0) for layer_idx in range(config.n_layers)]
+        ####
+
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
         # DiT-Air
@@ -130,7 +134,7 @@ class MMDIT(nn.Module):
             nn.Linear(config.d_model, config.d_model * 2 * 2 * 3)
         )
 
-    def get_block_mask(self, x0, x1, kv_cache):
+    def get_block_mask(self, x0, x1, kv_cache, is_local):
         if not self.config.causal:
             return None
         seq_len = x0.shape[1] + x1.shape[1]
@@ -139,14 +143,17 @@ class MMDIT(nn.Module):
             n_tokens=seq_len + offset,
             tokens_per_frame=self.config.tokens_per_frame,
             n_cached_tokens=offset,
+            window_len=self.local_window_len if is_local else None,
             device=x0.device
         )
 
     def forward(self, x0, x1, cond, kv_cache=None):
-        block_mask = self.get_block_mask(x0, x1, kv_cache)
-        cond_y = self.cond_proj(cond)
-        for block in self.blocks:
-            x0, x1 = block(x0, x1, cond_y, block_mask, kv_cache)
+        local_block_mask = self.get_block_mask(x0, x1, kv_cache, is_local=True)
+        global_block_mask = self.get_block_mask(x0, x1, kv_cache, is_local=False)
+        cond0, cond1 = self.cond_proj(cond).chunk(2, dim=-1)
+        for layer_idx, block in enumerate(self.blocks):
+            block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask
+            x0, x1 = block(x0, x1, cond0, cond1, block_mask, kv_cache)
         return x0, x1
 
 

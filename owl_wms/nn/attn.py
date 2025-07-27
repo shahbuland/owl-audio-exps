@@ -23,18 +23,22 @@ def checkpoint(function, *args, **kwargs):
     return torch_checkpoint(function, *args, **kwargs)
 
 
-def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, n_cached_tokens: int = 0, device="cpu"):
+def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, window_len: int = None, n_cached_tokens: int = 0, device="cpu"):
     # Build n_tokens X n_tokens BlockMask which is causal and disallows wrapping
     assert 0 <= n_cached_tokens < n_tokens, "kv cache cannot exceept total tokens"
 
     frame_id = torch.arange(n_tokens, device=device, dtype=torch.int32) // tokens_per_frame
     n_frames = n_tokens // tokens_per_frame
 
-    def mask_mod(b, h, q, k):
+    if window_len is None:
+        window_len = n_frames
+
+    def mask_mod(b, h, q, kv):
         abs_q = q + n_cached_tokens
-        is_causal = frame_id[k] <= frame_id[abs_q]
-        is_wrap = (frame_id[abs_q] == n_frames - 1) & (frame_id[k] == 0)
-        return is_causal & ~is_wrap
+        is_causal = frame_id[kv] <= frame_id[abs_q]
+        is_wrap = (frame_id[abs_q] == n_frames - 1) & (frame_id[kv] == 0)
+        window_mask = abs_q - kv < window_len
+        return is_causal & ~is_wrap & window_mask
 
     return create_block_mask(
         mask_mod,
