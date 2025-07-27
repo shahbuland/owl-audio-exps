@@ -56,8 +56,6 @@ class GameRFTAudioCore(nn.Module):
 
         if not self.uncond:
             ctrl_cond = self.control_embed(mouse, btn)  # [b,n,d]
-            if ctrl_cond.size(1) < t_cond.size(1):
-                ctrl_cond = F.pad(ctrl_cond, (0, 0, 0, 1), mode='replicate')
             if has_controls is not None:
                 ctrl_cond = torch.where(has_controls[:,None,None], ctrl_cond, torch.zeros_like(ctrl_cond))
             cond = t_cond + ctrl_cond  # [b,n,d]

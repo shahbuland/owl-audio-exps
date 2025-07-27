@@ -1,6 +1,7 @@
 import torch
 from tqdm import tqdm
 
+from ..utils import batch_permute_to_length
 from ..nn.kv_cache import KVCache
 
 from .schedulers import get_sd3_euler
@@ -118,8 +119,11 @@ class AVCachingSampler:
             torch.cat([prev_vid, new_vid], dim=1),
             torch.cat([prev_aud, new_aud], dim=1),
             torch.cat([t_prev, t_new], dim=1),
-            torch.cat([prev_mouse, curr_mouse], dim=1),
-            torch.cat([prev_btn, curr_btn], dim=1),
+            *batch_permute_to_length(
+                torch.cat([prev_mouse, curr_mouse], dim=1),
+                torch.cat([prev_btn, curr_btn], dim=1),
+                prev_mouse.size(1) + 1
+            ),
             kv_cache=kv_cache,
         )
         kv_cache.disable_cache_updates()
