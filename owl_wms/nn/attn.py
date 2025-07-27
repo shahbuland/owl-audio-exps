@@ -37,7 +37,7 @@ def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, window_len: i
         abs_q = q + n_cached_tokens
         is_causal = frame_id[kv] <= frame_id[abs_q]
         is_wrap = (frame_id[abs_q] == n_frames - 1) & (frame_id[kv] == 0)
-        window_mask = abs_q - kv < window_len
+        window_mask = abs_q - kv < (window_len * tokens_per_frame)
         return is_causal & ~is_wrap & window_mask
 
     return create_block_mask(
