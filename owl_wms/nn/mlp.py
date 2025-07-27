@@ -10,8 +10,8 @@ class MLPCustom(nn.Module):
         self.fc2 = nn.Linear(dim_middle, dim_out)
 
         nn.init.kaiming_normal_(self.fc1.weight)
-        nn.init.kaiming_normal_(self.fc2.weight)
-        
+        nn.init.zeros_(self.fc2.weight)
+
         nn.init.zeros_(self.fc1.bias)
         nn.init.zeros_(self.fc2.bias)
 
@@ -33,6 +33,6 @@ class MLP(MLPCustom):
 
     def forward(self, x):
         x = self.fc1(x)
-        x = F.silu(x)
+        x = F.relu(x).squre()
         x = self.fc2(x)
         return x
