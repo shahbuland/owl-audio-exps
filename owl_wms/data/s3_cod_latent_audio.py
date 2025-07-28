@@ -89,5 +89,6 @@ def get_loader(batch_size, dataset_path, window_length):
         drop_last=True,
         pin_memory=True,
         prefetch_factor=8,
+        persistent_worker=True,
         **loader_kwargs
     )
