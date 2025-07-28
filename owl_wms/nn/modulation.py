@@ -1,8 +1,8 @@
-import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .normalization import LayerNorm, rms_norm
+from .normalization import layer_norm
+
 
 class AdaLN(nn.Module):
     def __init__(self, dim):
@@ -22,7 +22,7 @@ class AdaLN(nn.Module):
         ab = ab.reshape(b, nm, 2*d)        # [b, nm, 2d]
 
         a, b_ = ab.chunk(2, dim=-1)        # [b, nm, d] each
-        x = rms_norm(x) * (1 + a) + b_
+        x = layer_norm(x) * (1 + a) + b_
         return x
 
 class Gate(nn.Module):
@@ -51,7 +51,7 @@ def cond_adaln(x, scale, bias):
     # broadcast [b,n,d] → [b,n*m,d]
     scale = scale.view(b, n, 1, d).expand(-1,-1,m,-1).reshape(b, nm, d)
     bias  = bias .view(b, n, 1, d).expand(-1,-1,m,-1).reshape(b, nm, d)
-    x_norm = rms_norm(x)
+    x_norm = layer_norm(x)
     return x_norm * (1 + scale) + bias
 
 def cond_gate(x, gate):
