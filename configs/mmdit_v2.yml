@@ -27,7 +27,7 @@ train:
   data_id: cod_s3_audio
   data_kwargs:
     window_length: 1000
-    dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/npy_train
+    dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/train_npy
 
   sample_data_id: cod_s3_audio
   sample_data_kwargs:

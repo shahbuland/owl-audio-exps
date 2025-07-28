@@ -39,18 +39,16 @@ class WindowedViewDataset(Dataset):
         seq_len, missing, truncated = self.table[["seq_len", "missing", "truncated"]]
         self.columns = [c for c in self.table.columns if c not in meta_cols]
 
-        index = []
+        self._index = []
         for i, (L, miss, trunc) in enumerate(zip(seq_len, missing, truncated)):
             if not include_missing_features and miss:
                 continue
             if not include_truncated and trunc:
                 continue
             for start in range(0, L, window_length):
-                index.append((i, start))
+                self._index.append((i, start))
 
-        print(f"{len(index)} samples qualified out of {len(seq_len)} total videos")
-
-        self._index = index
+        print(f"{len(self._index)} samples qualified out of {len(seq_len)} total videos")
 
     def __len__(self):
         return len(self._index)
