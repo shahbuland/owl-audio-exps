@@ -133,7 +133,7 @@ class MMDIT(nn.Module):
             nn.Linear(config.d_model, config.d_model * 2 * 2 * 3)
         )
 
-    def get_block_mask(self, x0, x1, kv_cache, is_local):
+    def get_block_mask(self, x0, x1, kv_cache, window_len):
         if not self.config.causal:
             return None
         seq_len = x0.shape[1] + x1.shape[1]
@@ -142,13 +142,13 @@ class MMDIT(nn.Module):
             n_tokens=seq_len + offset,
             tokens_per_frame=self.config.tokens_per_frame,
             n_cached_tokens=offset,
-            window_len=self.local_window if is_local else self.global_window,
+            window_len=window_len,
             device=x0.device
         )
 
     def forward(self, x0, x1, cond, kv_cache=None):
-        local_block_mask = self.get_block_mask(x0, x1, kv_cache, is_local=True)
-        global_block_mask = self.get_block_mask(x0, x1, kv_cache, is_local=False)
+        local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.local_window)
+        global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.global_window)
         cond0, cond1 = self.cond_proj(cond).chunk(2, dim=-1)
         for layer_idx, block in enumerate(self.blocks):
             block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask
