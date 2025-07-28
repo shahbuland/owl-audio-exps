@@ -1,8 +1,11 @@
-import torch
-from tqdm import tqdm
 from ema_pytorch import EMA
+from pathlib import Path
+import tqdm
 import wandb
+
+import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 
 from .base import BaseTrainer
 
@@ -152,7 +155,7 @@ class AVRFTTrainer(BaseTrainer):
 
         local_step = 0
         for epoch in range(self.train_cfg.epochs):
-            for batch in tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
+            for batch in tqdm.tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
 
                 batch = [t.cuda().bfloat16() for t in batch]
                 batch_vid, batch_audio, batch_mouse, batch_btn = batch
@@ -215,6 +218,19 @@ class AVRFTTrainer(BaseTrainer):
                                 else:
                                     video = wandb_av_out
                                     wandb_dict['samples'] = video
+
+                                # Save latent samples
+                                if getattr(self.train_cfg, "eval_sample_dir", None):
+                                    def gather_concat(t, dim=0):
+                                        buf = [torch.zeros_like(t) for _ in range(self.world_size)]
+                                        dist.all_gather(buf, t)
+                                        return torch.cat(buf, dim=dim)
+                                    latent_vid, latent_aud = gather_concat(latent_vid), gather_concat(latent_aud)
+                                    if self.rank == 0:
+                                        eval_dir = Path(self.train_cfg.eval_sample_dir)
+                                        eval_dir.mkdir(parents=True, exist_ok=True)
+                                        torch.save(latent_vid.cpu(), eval_dir / f"vid.{self.total_step_counter}.pt")
+                                        torch.save(latent_aud.cpu(), eval_dir / f"aud.{self.total_step_counter}.pt")
 
                         wandb.log(wandb_dict)
 
