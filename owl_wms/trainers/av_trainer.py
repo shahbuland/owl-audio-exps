@@ -195,42 +195,11 @@ class AVRFTTrainer(BaseTrainer):
 
                         # Sampling commented out for now
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
-                            with ctx, torch.no_grad():
-
-                                vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-                                video_out, audio_out, latent_vid, latent_aud, mouse, button = sampler(
-                                    get_ema_core(),
-                                    vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
-                                    aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
-                                    mouse_for_sample.bfloat16().cuda(),
-                                    btn_for_sample.bfloat16().cuda(),
-                                    decode_fn,
-                                    audio_decode_fn,
-                                    self.train_cfg.vae_scale,
-                                    self.train_cfg.audio_vae_scale
-                                ) # -> [b,n,c,h,w]
-                                wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
-                                if len(wandb_av_out) == 3:
-                                    video, depth_gif, flow_gif = wandb_av_out
-                                    wandb_dict['samples'] = video
-                                    wandb_dict['depth_gif'] = depth_gif
-                                    wandb_dict['flow_gif'] = flow_gif
-                                else:
-                                    video = wandb_av_out
-                                    wandb_dict['samples'] = video
-
-                                # Save latent samples
-                                if getattr(self.train_cfg, "eval_sample_dir", None):
-                                    def gather_concat(t, dim=0):
-                                        buf = [torch.zeros_like(t) for _ in range(self.world_size)]
-                                        dist.all_gather(buf, t)
-                                        return torch.cat(buf, dim=dim)
-                                    latent_vid, latent_aud = gather_concat(latent_vid), gather_concat(latent_aud)
-                                    if self.rank == 0:
-                                        eval_dir = Path(self.train_cfg.eval_sample_dir)
-                                        eval_dir.mkdir(parents=True, exist_ok=True)
-                                        torch.save(latent_vid.cpu(), eval_dir / f"vid.{self.total_step_counter}.pt")
-                                        torch.save(latent_aud.cpu(), eval_dir / f"aud.{self.total_step_counter}.pt")
+                            with ctx:
+                                eval_wandb_dict = self.eval_step(
+                                    sample_loader, sampler, get_ema_core, decode_fn, audio_decode_fn
+                                )
+                                wandb_dict.update(eval_wandb_dict)
 
                         wandb.log(wandb_dict)
 
@@ -240,3 +209,58 @@ class AVRFTTrainer(BaseTrainer):
                             self.save()
 
                     self.barrier()
+
+    def eval_step(self, sample_loader, sampler, get_ema_core, decode_fn, audio_decode_fn):
+        eval_wandb_dict = {}
+
+        # ---- Generation Run ----
+        vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
+        video_out, audio_out, latent_vid, latent_aud, mouse, button = sampler(
+            get_ema_core(),
+            vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
+            aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
+            mouse_for_sample.bfloat16().cuda(),
+            btn_for_sample.bfloat16().cuda(),
+            decode_fn,
+            audio_decode_fn,
+            self.train_cfg.vae_scale,
+            self.train_cfg.audio_vae_scale
+        )  # -> [b,n,c,h,w]
+
+        # ---- Generate Media Artifacts ----
+        wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
+
+        # Gather artifacts to rank 0 and structure
+        all_av = [None] * self.world_size
+        dist.all_gather_object(all_av, wandb_av_out)
+        if self.rank == 0:
+            samples = [av[0] for av in all_av]
+            depth_gif = [av[1] for av in all_av if len(av) == 3]
+            flow_gif = [av[2] for av in all_av if len(av) == 3]
+            wandb.log({
+                'samples': samples,
+                'depth_gif': depth_gif,
+                'flow_gif': flow_gif
+            })
+        dist.barrier()
+
+        if len(wandb_av_out) == 3:
+            video, depth_gif, flow_gif = wandb_av_out
+            eval_wandb_dict['samples'] = video
+            eval_wandb_dict['depth_gif'] = depth_gif
+            eval_wandb_dict['flow_gif'] = flow_gif
+        else:
+            eval_wandb_dict['samples'] = wandb_av_out
+
+        # ---- Save Latent Artifacts ----
+        if getattr(self.train_cfg, "eval_sample_dir", None):
+            def gather_concat(t, dim=0):
+                buf = [torch.zeros_like(t) for _ in range(self.world_size)]
+                dist.all_gather(buf, t)
+                return torch.cat(buf, dim=dim)
+            latent_vid, latent_aud = gather_concat(latent_vid), gather_concat(latent_aud)
+            if self.rank == 0:
+                eval_dir = Path(self.train_cfg.eval_sample_dir)
+                eval_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(latent_vid.cpu(), eval_dir / f"vid.{self.total_step_counter}.pt")
+                torch.save(latent_aud.cpu(), eval_dir / f"aud.{self.total_step_counter}.pt")
