@@ -24,7 +24,7 @@ class SingleKVCache:
 
     def enable_cache_updates(self):
         self.should_update = True
-    
+
     def disable_cache_updates(self):
         self.should_update = False
 
@@ -38,7 +38,7 @@ class SingleKVCache:
         dummy = torch.empty(*shape, device = self.device, dtype = self.dtype)
         self.cache = [(torch.empty_like(dummy), torch.empty_like(dummy)) for _ in range(self.config.n_layers)]
         self.offset = 0
-        
+
     @torch.no_grad()
     def get(self, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
@@ -47,13 +47,13 @@ class SingleKVCache:
             k = k + torch.randn_like(k) * self.noise_caches
             v = v + torch.randn_like(v) * self.noise_caches
         return k,v
-    
+
     @torch.no_grad()
     def update(self, new_k, new_v, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
 
         self.cache[layer_ind] = (new_k,new_v)
-    
+
     @torch.no_grad()
     def truncate(self, truncate_amt, front = False):
         """
@@ -63,7 +63,7 @@ class SingleKVCache:
         def tuple_truncate(k, v):
             if front:
                 k = k[:,:,:-truncate_amt]
-                v = v[:,:,:-truncate_amt] 
+                v = v[:,:,:-truncate_amt]
             else:
                 k = k[:,:,truncate_amt:]
                 v = v[:,:,truncate_amt:]
@@ -83,6 +83,7 @@ class SingleKVCache:
         return self.cache[0][0].shape[2]
 
     def n_frames(self):
+        assert len(self) % self.config.tokens_per_frame == 0
         return len(self) // self.config.tokens_per_frame
 
     @property

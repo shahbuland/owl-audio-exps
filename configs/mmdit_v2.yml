@@ -73,6 +73,7 @@ train:
     only_return_generated: false
 
   n_samples: 4
+  eval_sample_dir: /mnt/data/lapp0/eval_dump/av_mmdit_v2/
 
   vae_id: null
   vae_batch_size: 4

@@ -56,7 +56,7 @@ class AVCachingSampler:
         kv_cache.reset(batch_size)
 
         # random sequence of controller input up to num_frames to sample
-        mouse, btn = batch_permute_to_length(mouse, btn, self.num_frames + self.window_length)
+        mouse, btn = batch_permute_to_length(mouse, btn, self.num_frames + video.size(1))
 
         video_latents = [] if self.only_return_generated else [video]
         audio_latents = [] if self.only_return_generated else [audio]
