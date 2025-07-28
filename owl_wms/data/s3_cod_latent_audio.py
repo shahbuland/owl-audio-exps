@@ -1,4 +1,4 @@
-from datasets import load_dataset
+from npy_table import NpyTable
 
 import torch
 import torch.distributed as dist
@@ -21,42 +21,33 @@ class AutoEpochDistributedSampler(DistributedSampler):
 
 
 class WindowedViewDataset(Dataset):
-    """Construct (row_idx, start) index over a hf dataset"""
+    """
+    A sliding-window view over an NpyTable.
+    Indexes into (row_idx, start_offset) pairs.
+    """
     def __init__(
-            self,
-            dataset_path: str,
-            window_length: int,
-            split="train",
-            include_missing_features: bool = False,
-            include_truncated: bool = True,
-            meta_cols=("tarball", "pt_idx", "missing", "truncated", "seq_len"),
-
+        self,
+        table_dir: str,
+        window_length: int,
+        include_missing_features: bool = False,
+        include_truncated: bool = True,
+        meta_cols: tuple = ("tarball", "pt_idx", "missing", "truncated", "seq_len"),
     ):
         self.window_length = window_length
+        self.table = NpyTable(table_dir)
 
-        # load the dataset and convert feature columns to torch
-        self.dataset = load_dataset(
-            "parquet",
-            data_files=f"{dataset_path}/*.parquet",
-            split=split,
-            keep_in_memory=False
-        )
+        seq_len, missing, truncated = self.table[["seq_len", "missing", "truncated"]]
+        self.columns = [c for c in self.table.columns if c not in meta_cols]
 
-        seq_len = self.dataset.data["seq_len"].to_pylist()
-        missing = self.dataset.data["missing"].to_pylist()
-        truncated = self.dataset.data["truncated"].to_pylist()
-
-        self.columns = [c for c in self.dataset.column_names if c not in meta_cols]
-        self.dataset.set_format(type="torch", columns=self.columns)
-
-        # calculate list of unique sample keys (dataset_row_idx, window_start_offset)
         index = []
-        for i, (L, is_missing, is_truncated) in enumerate(zip(seq_len, missing, truncated)):
-            if (not include_missing_features) and is_missing:
+        for i, (L, miss, trunc) in enumerate(zip(seq_len, missing, truncated)):
+            if not include_missing_features and miss:
                 continue
-            if (not include_truncated) and is_truncated:
+            if not include_truncated and trunc:
                 continue
-            index.extend((i, j * window_length) for j in range(int(L) // window_length))
+            for start in range(0, L, window_length):
+                index.append((i, start))
+
         print(f"{len(index)} samples qualified out of {len(seq_len)} total videos")
 
         self._index = index
@@ -66,12 +57,10 @@ class WindowedViewDataset(Dataset):
 
     def __getitem__(self, idx):
         row, start = self._index[idx]
-        item = self.dataset[row]
-        res = {
-            col: item[col][start: start + self.window_length]
+        return {
+            col: torch.from_numpy(self.table[col][row][start: start + self.window_length])
             for col in self.columns
         }
-        return res
 
 
 def collate_fn(batch):
@@ -79,12 +68,7 @@ def collate_fn(batch):
         k: torch.nan_to_num(torch.stack([item[k] for item in batch]), nan=0.0)  # TODO: preprocessing step instead
         for k in batch[0]
     }
-
-    # TODO: do this as a dataset preprocessing step instead
-    stacked["latent"] = torch.nan_to_num(stacked["latent"], nan=0.0)
-    stacked["latent"] = torch.clamp(stacked["latent"], -8, 8)
-
-    return [stacked[k] for k in ("latent", "audio", "mouse", "buttons")]
+    return [stacked[k] for k in ("video", "audio", "mouse", "buttons")]
 
 
 def get_loader(batch_size, dataset_path, window_length):
