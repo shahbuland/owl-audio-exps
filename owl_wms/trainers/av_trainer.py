@@ -111,12 +111,6 @@ class AVRFTTrainer(BaseTrainer):
         )
         #torch.compile(self.ema.ema_model.module.core if self.world_size > 1 else self.ema.ema_model.core, dynamic=False, fullgraph=True)
 
-        def get_ema_core():
-            if self.world_size > 1:
-                return self.ema.ema_model.module.core
-            else:
-                return self.ema.ema_model.core
-
         # Set up optimizer and scheduler
         if self.train_cfg.opt.lower() == "muon":
             self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
@@ -197,7 +191,7 @@ class AVRFTTrainer(BaseTrainer):
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx:
                                 eval_wandb_dict = self.eval_step(
-                                    sample_loader, sampler, get_ema_core, decode_fn, audio_decode_fn
+                                    sample_loader, sampler, decode_fn, audio_decode_fn
                                 )
                                 if self.rank == 0:
                                     wandb_dict.update(eval_wandb_dict)
@@ -212,11 +206,11 @@ class AVRFTTrainer(BaseTrainer):
 
                     self.barrier()
 
-    def eval_step(self, sample_loader, sampler, get_ema_core, decode_fn, audio_decode_fn):
+    def eval_step(self, sample_loader, sampler, decode_fn, audio_decode_fn):
         # ---- Generation Run ----
         vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
         video_out, audio_out, latent_vid, latent_aud, mouse, button = sampler(
-            get_ema_core(),
+            self.get_module(ema=True).core,
             vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
             aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
             mouse_for_sample.bfloat16().cuda(),
