@@ -14,9 +14,6 @@ from .rope import FlatVideoRoPE
 torch.backends.cuda.enable_flash_sdp(enabled = True)
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask, BlockMask
 
-create_block_mask = torch.compile(create_block_mask, dynamic=True)
-flex_attention = torch.compile(flex_attention, dynamic=True)
-
 
 def checkpoint(function, *args, **kwargs):
     kwargs.setdefault("use_reentrant", False)

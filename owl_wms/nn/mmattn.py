@@ -120,8 +120,10 @@ class MMDIT(nn.Module):
         super().__init__()
         self.config = config
 
-        # layer attention pattern is [global, local, global, local, global, ...]
+        # layer attention pattern is [global, local, local, local, global, ...]
         self.local_layers = [~(layer_idx % 4 == 0) for layer_idx in range(config.n_layers)]
+        self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32))
+        self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32))
 
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
@@ -140,7 +142,7 @@ class MMDIT(nn.Module):
             n_tokens=seq_len + offset,
             tokens_per_frame=self.config.tokens_per_frame,
             n_cached_tokens=offset,
-            window_len=self.config.local_window if is_local else self.config.global_window,
+            window_len=self.local_window if is_local else self.global_window,
             device=x0.device
         )
 
