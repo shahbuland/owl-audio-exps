@@ -189,7 +189,7 @@ class AVRFTTrainer(BaseTrainer):
                         timer.reset()
 
                         # Sampling commented out for now
-                        if (#self.total_step_counter != 0 and
+                        if (self.total_step_counter != 0 and
                             self.total_step_counter % self.train_cfg.sample_interval == 0 and
                             self.rank == 0
                         ):
