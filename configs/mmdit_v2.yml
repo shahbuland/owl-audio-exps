@@ -72,7 +72,6 @@ train:
     noise_prev: 0.2
     only_return_generated: false
 
-  sample_seed_frames: 16
   n_samples: 4
 
   vae_id: null

@@ -140,7 +140,9 @@ class AVRFTTrainer(BaseTrainer):
 
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
-        sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.n_samples, **self.train_cfg.sample_data_kwargs)
+
+        n_samples = (self.train_cfg.n_samples + self.world_size - 1) // self.world_size  # round up to next world_size
+        sample_loader = get_loader(self.train_cfg.sample_data_id, n_samples, **self.train_cfg.sample_data_kwargs)
         sample_loader = iter(sample_loader)
 
         if self.train_cfg.data_id == "cod_s3_mixed":
@@ -189,18 +191,11 @@ class AVRFTTrainer(BaseTrainer):
                         timer.reset()
 
                         # Sampling commented out for now
-                        if (
-                            self.total_step_counter == 1000 or  # hack
-                            self.total_step_counter != 0 and
-                            self.total_step_counter % self.train_cfg.sample_interval == 0 and
-                            self.rank == 0
-                        ):
+                        if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx, torch.no_grad():
 
                                 vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-                                vid_for_sample = vid_for_sample[:, :self.train_cfg.sample_seed_frames]
-                                aud_for_sample = aud_for_sample[:, :self.train_cfg.sample_seed_frames]
-                                sampled_video, sampled_audio, latent_video, latent_audio, mouse, button = sampler(
+                                video_out, audio_out, latent_vid, latent_aud, mouse, button = sampler(
                                     get_ema_core(),
                                     vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
                                     aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
@@ -211,20 +206,17 @@ class AVRFTTrainer(BaseTrainer):
                                     self.train_cfg.vae_scale,
                                     self.train_cfg.audio_vae_scale
                                 ) # -> [b,n,c,h,w]
-                                print("latent_video.shape, latent_audio.shape", latent_video.shape, latent_audio.shape)
-                                if self.rank == 0:
-                                    wandb_av_out = to_wandb_av(sampled_video, sampled_audio, mouse, button)
-                                    if len(wandb_av_out) == 3:
-                                        video, depth_gif, flow_gif = wandb_av_out
-                                        wandb_dict['samples'] = video
-                                        wandb_dict['depth_gif'] = depth_gif
-                                        wandb_dict['flow_gif'] = flow_gif
-                                    else:
-                                        video = wandb_av_out
-                                        wandb_dict['samples'] = video
+                                wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
+                                if len(wandb_av_out) == 3:
+                                    video, depth_gif, flow_gif = wandb_av_out
+                                    wandb_dict['samples'] = video
+                                    wandb_dict['depth_gif'] = depth_gif
+                                    wandb_dict['flow_gif'] = flow_gif
+                                else:
+                                    video = wandb_av_out
+                                    wandb_dict['samples'] = video
 
-                        if self.rank == 0:
-                            wandb.log(wandb_dict)
+                        wandb.log(wandb_dict)
 
                     self.total_step_counter += 1
                     if self.total_step_counter % self.train_cfg.save_interval == 0:
