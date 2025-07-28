@@ -64,10 +64,10 @@ train:
   sample_interval: 5000
   save_interval: 10000
 
-  sampler_id: av_window
+  sampler_id: av_caching
   sampler_kwargs:
     n_steps: 16
-    window_length: 16
+    #window_length: 16
     cfg_scale: 1.0
     num_frames: 900
     noise_prev: 0.2
