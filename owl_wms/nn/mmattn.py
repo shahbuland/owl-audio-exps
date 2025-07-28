@@ -122,7 +122,7 @@ class MMDIT(nn.Module):
         self.config = config
 
         # layer attention pattern is [global, local, global, local, global, ...]
-        self.local_layers = [((layer_idx + 1) % 2 == 0) for layer_idx in range(config.n_layers)]
+        self.local_layers = [~(layer_idx % 4 == 0) for layer_idx in range(config.n_layers)]
 
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
