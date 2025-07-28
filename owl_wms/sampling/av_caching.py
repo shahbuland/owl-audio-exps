@@ -1,6 +1,7 @@
 import torch
 from tqdm import tqdm
 
+from ..utils import batch_permute_to_length
 from ..nn.kv_cache import KVCache
 
 from .schedulers import get_sd3_euler
@@ -53,6 +54,9 @@ class AVCachingSampler:
 
         kv_cache = KVCache(model.config)
         kv_cache.reset(batch_size)
+
+        # random sequence of controller input up to num_frames to sample
+        mouse, btn = batch_permute_to_length(mouse, btn, self.num_frames + self.window_length)
 
         video_latents = [] if self.only_return_generated else [video]
         audio_latents = [] if self.only_return_generated else [audio]
