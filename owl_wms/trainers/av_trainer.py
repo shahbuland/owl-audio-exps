@@ -243,11 +243,11 @@ class AVRFTTrainer(BaseTrainer):
         ]
         if self.rank == 0:
             wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
-            eval_wandb_dict = {
-                'samples': wandb_av_out[0],
-                'depth_gif': wandb_av_out[1] if len(wandb_av_out) > 1 else None,
-                'flow_gif': wandb_av_out[2] if len(wandb_av_out) > 2 else None,
-            }
+            if len(wandb_av_out) == 1:
+                eval_wandb_dict = dict(samples=wandb_av_out)
+            else:
+                video, depth_gif, flow_gif = wandb_av_out
+                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif, flow_gif=flow_gif)
         else:
             eval_wandb_dict = None
         dist.barrier()
