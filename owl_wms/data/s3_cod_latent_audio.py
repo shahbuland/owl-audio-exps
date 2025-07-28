@@ -1,4 +1,4 @@
-from npy_table import NpyTable
+from .npy_table import NpyTable
 
 import torch
 import torch.distributed as dist
