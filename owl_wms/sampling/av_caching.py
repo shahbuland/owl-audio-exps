@@ -56,6 +56,8 @@ class AVCachingSampler:
 
         video_out = [] if self.only_return_generated else [video]
         audio_out = [] if self.only_return_generated else [audio]
+        mouse_out = [] if self.only_return_generated else [mouse[:, :init_len]]
+        btn_out = [] if self.only_return_generated else [btn[:, :init_len]]
 
         # History for the first frame generation step = full clean clip
         prev_video, prev_audio = video, audio
@@ -74,18 +76,22 @@ class AVCachingSampler:
 
             video_out.append(new_video)
             audio_out.append(new_audio)
+            mouse_out.append(curr_mouse)
+            btn_out.append(curr_btn)
 
             # all history kv cached except for newly generated from - set the previous as the new state
             prev_video, prev_audio = new_video, new_audio
             prev_mouse, prev_btn = curr_mouse, curr_btn
 
         video_out, audio_out = torch.cat(video_out, dim=1), torch.cat(audio_out, dim=1)
+        mouse_out, btn_out = torch.cat(mouse_out, dim=1), torch.cat(btn_out, dim=1)
+
         if decode_fn is not None:
             video_out = decode_fn(video_out * image_scale)
         if audio_decode_fn is not None:
             audio = audio_decode_fn(audio * audio_scale)
 
-        return video_out, audio_out, mouse, btn
+        return video_out, audio_out, mouse_out, btn_out
 
     def denoise_frame(
         self,
