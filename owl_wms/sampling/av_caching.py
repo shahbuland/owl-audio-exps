@@ -44,7 +44,7 @@ class AVCachingSampler:
             self,
             model,
             video: torch.Tensor, audio: torch.Tensor, mouse: torch.Tensor, btn: torch.Tensor,
-            decode_fn=None, audio_decode_fn=None, image_scale=1, audio_scale=1
+            decode_fn=None, audio_decode_fn=None, image_scale=1, audio_scale=1,
     ):
         """Generate `num_frames` new frames and return updated tensors."""
         batch_size, init_len = video.shape[:2]
@@ -54,8 +54,8 @@ class AVCachingSampler:
         kv_cache = KVCache(model.config)
         kv_cache.reset(batch_size)
 
-        video_out = [] if self.only_return_generated else [video]
-        audio_out = [] if self.only_return_generated else [audio]
+        video_latents = [] if self.only_return_generated else [video]
+        audio_latents = [] if self.only_return_generated else [audio]
         mouse_out = [] if self.only_return_generated else [mouse[:, :init_len]]
         btn_out = [] if self.only_return_generated else [btn[:, :init_len]]
 
@@ -74,8 +74,8 @@ class AVCachingSampler:
                 dt=dt,
             )
 
-            video_out.append(new_video)
-            audio_out.append(new_audio)
+            video_latents.append(new_video)
+            audio_latents.append(new_audio)
             mouse_out.append(curr_mouse)
             btn_out.append(curr_btn)
 
@@ -83,15 +83,16 @@ class AVCachingSampler:
             prev_video, prev_audio = new_video, new_audio
             prev_mouse, prev_btn = curr_mouse, curr_btn
 
-        video_out, audio_out = torch.cat(video_out, dim=1), torch.cat(audio_out, dim=1)
+        video_latents, audio_latents = torch.cat(video_latents, dim=1), torch.cat(audio_latents, dim=1)
         mouse_out, btn_out = torch.cat(mouse_out, dim=1), torch.cat(btn_out, dim=1)
 
+        video_out, audio_out = None, None
         if decode_fn is not None:
-            video_out = decode_fn(video_out * image_scale)
+            video_out = decode_fn(video_latents * image_scale)
         if audio_decode_fn is not None:
-            audio = audio_decode_fn(audio * audio_scale)
+            audio_out = audio_decode_fn(audio_latents * audio_scale)
 
-        return video_out, audio_out, mouse_out, btn_out
+        return video_out, audio_out, video_latents, audio_latents, mouse_out, btn_out
 
     def denoise_frame(
         self,

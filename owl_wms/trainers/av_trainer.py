@@ -200,7 +200,7 @@ class AVRFTTrainer(BaseTrainer):
                                 vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
                                 vid_for_sample = vid_for_sample[:, :self.train_cfg.sample_seed_frames]
                                 aud_for_sample = aud_for_sample[:, :self.train_cfg.sample_seed_frames]
-                                samples, audio, sample_mouse, sample_button = sampler(
+                                sampled_video, sampled_audio, latent_video, latent_audio, mouse, button = sampler(
                                     get_ema_core(),
                                     vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
                                     aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
@@ -211,8 +211,9 @@ class AVRFTTrainer(BaseTrainer):
                                     self.train_cfg.vae_scale,
                                     self.train_cfg.audio_vae_scale
                                 ) # -> [b,n,c,h,w]
+                                print("latent_video.shape, latent_audio.shape", latent_video.shape, latent_audio.shape)
                                 if self.rank == 0:
-                                    wandb_av_out = to_wandb_av(samples, audio, sample_mouse, sample_button)
+                                    wandb_av_out = to_wandb_av(sampled_video, sampled_audio, mouse, button)
                                     if len(wandb_av_out) == 3:
                                         video, depth_gif, flow_gif = wandb_av_out
                                         wandb_dict['samples'] = video

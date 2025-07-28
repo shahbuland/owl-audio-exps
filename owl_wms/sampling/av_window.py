@@ -38,9 +38,9 @@ class AVWindowSampler:
         # audio is [b,n,c] and should be treated same as video (it'e being generated)
         # mouse is [b,n,2]
         # btn is [b,n,n_button]
-        
+
         # output will be [b,n+self.num_frames,c,h,w]
-        
+
         sampling_steps = self.n_steps
         num_frames = self.num_frames
 
@@ -48,17 +48,17 @@ class AVWindowSampler:
 
         clean_history = dummy_batch.clone()
         clean_audio_history = audio.clone()
-        
+
         extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, num_frames + self.window_length)
 
         def step_history():
             # Video history
-            new_history = clean_history.clone()[:,-self.window_length:] 
+            new_history = clean_history.clone()[:,-self.window_length:]
             b,n,c,h,w = new_history.shape
             new_history[:,:-1] = zlerp(new_history[:,1:],self.noise_prev)
             new_history[:,-1] = torch.randn_like(new_history[:,0])
 
-            # Audio history 
+            # Audio history
             new_audio = clean_audio_history.clone()[:,-self.window_length:]
             new_audio[:,:-1] = zlerp(new_audio[:,1:],self.noise_prev)
             new_audio[:,-1] = torch.randn_like(new_audio[:,0])
@@ -85,14 +85,14 @@ class AVWindowSampler:
 
                 # Get unconditional predictions
                 pred_video_uncond, pred_audio_uncond = model(x, a, ts, mouse, btn, has_controls=uncond_mask)
-                
+
                 # Get conditional predictions
                 pred_video_cond, pred_audio_cond = model(x, a, ts, mouse, btn, has_controls=cond_mask)
 
                 # Apply CFG
                 pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
                 pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
-                
+
                 x = x - pred_video*dt[step_idx]
                 a = a - pred_audio*dt[step_idx]
                 ts = ts - dt[step_idx]
@@ -100,7 +100,7 @@ class AVWindowSampler:
                 local_history[:,-1] = x[:,-1]
                 local_audio[:,-1] = a[:,-1]
                 ts_history[:,-1] = ts[:,-1]
-            
+
             # Frame is entirely cleaned now
             new_frame = local_history[:,-1:]
             new_audio = local_audio[:,-1:]
@@ -115,15 +115,13 @@ class AVWindowSampler:
             extended_mouse = extended_mouse[:,-num_frames:]
             extended_btn = extended_btn[:,-num_frames:]
 
+        video_out, audio_out = None, None
         if decode_fn is not None:
-            x = x * image_scale
-            x = decode_fn(x)
-
+            video_out = decode_fn(x * image_scale)
         if audio_decode_fn is not None:
-            audio = audio * audio_scale
-            audio = audio_decode_fn(audio)
-    
-        return x, audio, extended_mouse, extended_btn
+            audio_out = audio_decode_fn(audio * audio_scale)
+
+        return video_out, audio_out, x, audio, extended_mouse, extended_btn
 
 class CausalAVWindowSampler:
     """
@@ -151,9 +149,9 @@ class CausalAVWindowSampler:
         # audio is [b,n,c] and should be treated same as video (it'e being generated)
         # mouse is [b,n,2]
         # btn is [b,n,n_button]
-        
+
         # output will be [b,n+self.num_frames,c,h,w]
-        
+
         sampling_steps = self.n_steps
         num_frames = self.num_frames
 
@@ -164,17 +162,17 @@ class CausalAVWindowSampler:
 
         clean_history = dummy_batch.clone()
         clean_audio_history = audio.clone()
-        
+
         extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, num_frames + self.window_length)
 
         def step_history():
             # Video history
-            new_history = clean_history.clone()[:,-self.window_length:] 
+            new_history = clean_history.clone()[:,-self.window_length:]
             b,n,c,h,w = new_history.shape
             new_history[:,:-1] = zlerp(new_history[:,1:],self.noise_prev)
             new_history[:,-1] = torch.randn_like(new_history[:,0])
 
-            # Audio history 
+            # Audio history
             new_audio = clean_audio_history.clone()[:,-self.window_length:]
             new_audio[:,:-1] = zlerp(new_audio[:,1:],self.noise_prev)
             new_audio[:,-1] = torch.randn_like(new_audio[:,0])
@@ -212,7 +210,7 @@ class CausalAVWindowSampler:
 
                 # Get unconditional predictions
                 pred_video_uncond, pred_audio_uncond = model(x, a, ts, mouse, btn, has_controls=uncond_mask, kv_cache=cache_uncond)
-                
+
                 if self.cfg_scale > 0:
                     # Get conditional predictions
                     pred_video_cond, pred_audio_cond = model(x, a, ts, mouse, btn, has_controls=cond_mask, kv_cache=cache_cond)
@@ -223,7 +221,7 @@ class CausalAVWindowSampler:
                     # Skip conditional branch when cfg_scale is 0
                     pred_video = pred_video_uncond
                     pred_audio = pred_audio_uncond
-                
+
                 x = x - pred_video*dt[step_idx]
                 a = a - pred_audio*dt[step_idx]
                 ts = ts - dt[step_idx]
@@ -235,13 +233,13 @@ class CausalAVWindowSampler:
                 if step_idx == 0:
                     mouse = mouse[:,-1:]
                     btn = btn[:,-1:]
-                    
+
                     # The final frame doesn't go in cache
                     cache_cond.truncate(1, front = True)
                     cache_uncond.truncate(1, front = True)
                     cache_cond.disable_cache_updates()
                     cache_uncond.disable_cache_updates()
-            
+
             # Frame is entirely cleaned now
             new_frame = local_history[:,-1:]
             new_audio = local_audio[:,-1:]
@@ -263,8 +261,9 @@ class CausalAVWindowSampler:
         if audio_decode_fn is not None:
             audio = audio * audio_scale
             audio = audio_decode_fn(audio)
-    
+
         return x, audio, extended_mouse, extended_btn
+
 
 class CausalAVWindowSamplerNoCFG(CausalAVWindowSampler):
     def __init__(self, *args, **kwargs):
@@ -275,9 +274,9 @@ class CausalAVWindowSamplerNoCFG(CausalAVWindowSampler):
         # audio is [b,n,c] and should be treated same as video (it'e being generated)
         # mouse is [b,n,2]
         # btn is [b,n,n_button]
-        
+
         # output will be [b,n+self.num_frames,c,h,w]
-        
+
         sampling_steps = self.n_steps
         num_frames = self.num_frames
 
@@ -287,17 +286,17 @@ class CausalAVWindowSamplerNoCFG(CausalAVWindowSampler):
 
         clean_history = dummy_batch.clone()
         clean_audio_history = audio.clone()
-        
+
         extended_mouse, extended_btn = batch_permute_to_length(mouse, btn, num_frames + self.window_length)
 
         def step_history():
             # Video history
-            new_history = clean_history.clone()[:,-self.window_length:] 
+            new_history = clean_history.clone()[:,-self.window_length:]
             b,n,c,h,w = new_history.shape
             new_history[:,:-1] = zlerp(new_history[:,1:],self.noise_prev)
             new_history[:,-1] = torch.randn_like(new_history[:,0])
 
-            # Audio history 
+            # Audio history
             new_audio = clean_audio_history.clone()[:,-self.window_length:]
             new_audio[:,:-1] = zlerp(new_audio[:,1:],self.noise_prev)
             new_audio[:,-1] = torch.randn_like(new_audio[:,0])
@@ -331,7 +330,7 @@ class CausalAVWindowSamplerNoCFG(CausalAVWindowSampler):
                     ts = ts[:,-1:]
 
                 pred_video, pred_audio = model(x, a, ts, mouse, btn, has_controls=cond_mask, kv_cache=cache_cond)
-                
+
                 x = x - pred_video*dt[step_idx]
                 a = a - pred_audio*dt[step_idx]
                 ts = ts - dt[step_idx]
@@ -343,11 +342,11 @@ class CausalAVWindowSamplerNoCFG(CausalAVWindowSampler):
                 if step_idx == 0:
                     mouse = mouse[:,-1:]
                     btn = btn[:,-1:]
-                    
+
                     # The final frame doesn't go in cache
                     cache_cond.truncate(1, front = True)
                     cache_cond.disable_cache_updates()
-            
+
             # Frame is entirely cleaned now
             new_frame = local_history[:,-1:]
             new_audio = local_audio[:,-1:]
@@ -369,7 +368,7 @@ class CausalAVWindowSamplerNoCFG(CausalAVWindowSampler):
         if audio_decode_fn is not None:
             audio = audio * audio_scale
             audio = audio_decode_fn(audio)
-    
+
         return x, audio, extended_mouse, extended_btn
 
 def test_window_cfg_sampler():
