@@ -1,4 +1,3 @@
-import datetime as dt
 from ema_pytorch import EMA
 from pathlib import Path
 import tqdm
