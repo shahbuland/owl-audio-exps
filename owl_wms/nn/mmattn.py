@@ -200,44 +200,6 @@ def test_fwd_with_cache():
         print(len(cache))
         print(cache.cache[0][0].shape)
 
-def test_mask():
-    import matplotlib.pyplot as plt
-
-    n_frames = 10
-    n_tok_per_frame = 17
-    n_audio_tokens = 1
-    total_tokens = n_frames * n_tok_per_frame
-
-    # TODO !!!!
-    mask = create_block_causal_mask_with_mm(total_tokens, n_tok_per_frame, n_audio_tokens)
-
-    # Convert to visualization format: 1 = allowed (white), 0 = blocked (black)
-    mask_vis = (mask != -float('inf')).float()
-
-    plt.figure(figsize=(12, 10))
-    plt.imshow(mask_vis.cpu().numpy(), cmap='gray', interpolation='nearest')
-    plt.colorbar(label='Attention Allowed (1=Yes, 0=No)')
-    plt.title(f'Block Causal Mask with MM\n({total_tokens} total tokens, {n_tok_per_frame} per frame, {n_audio_tokens} audio per frame)')
-    plt.xlabel('Key Position')
-    plt.ylabel('Query Position')
-
-    # Add grid lines to show frame boundaries
-    for i in range(1, n_frames):
-        video_boundary = i * (n_tok_per_frame - n_audio_tokens)
-        audio_boundary = n_frames * (n_tok_per_frame - n_audio_tokens) + i * n_audio_tokens
-        plt.axhline(y=video_boundary - 0.5, color='red', linestyle='--', alpha=0.5)
-        plt.axvline(x=video_boundary - 0.5, color='red', linestyle='--', alpha=0.5)
-        plt.axhline(y=audio_boundary - 0.5, color='blue', linestyle='--', alpha=0.5)
-        plt.axvline(x=audio_boundary - 0.5, color='blue', linestyle='--', alpha=0.5)
-
-    plt.tight_layout()
-    plt.savefig('test_mm_mask.png', dpi=150, bbox_inches='tight')
-    plt.close()
-
-    print(f"Mask shape: {mask.shape}")
-    print(f"Number of blocked positions: {(mask == -float('inf')).sum().item()}")
-    print(f"Number of allowed positions: {(mask != -float('inf')).sum().item()}")
-
 
 if __name__ == "__main__":
     test_mask()
