@@ -46,7 +46,8 @@ class WindowedViewDataset(Dataset):
             if not include_truncated and trunc:
                 continue
             for start in range(0, L, window_length):
-                self._index.append((i, start))
+                if start + window_length <= L:
+                    self._index.append((i, start))
 
         print(f"{len(self._index)} samples qualified out of {len(seq_len)} total videos")
 
