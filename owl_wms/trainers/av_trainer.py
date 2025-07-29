@@ -134,8 +134,9 @@ class AVRFTTrainer(BaseTrainer):
         timer = Timer()
         timer.reset()
         metrics = LogHelper()
-        #if self.rank == 0:
-        #    wandb.watch(self.get_module(), log = 'all')
+
+        if self.rank == 0:
+            wandb.watch(self.get_module(), log='all')
 
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
