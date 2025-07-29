@@ -52,19 +52,19 @@ class NpyTable:
         else:
             raise KeyError(f"Invalid key: {key!r}")
 
-    def get(self, columns: List[str], row_idxs: List[int] | None = None) -> List[List[Any]]:
+    def get(self, columns: List[str], rows: List[int] | None = None) -> List[List[Any]]:
         invalid = set(columns) - set(self.columns)
         if invalid:
             raise KeyError(f"Unknown columns requested: {invalid}")
 
-        row_idxs = range(len(self.manifest)) if row_idxs is None else row_idxs
+        rows = range(len(self.manifest)) if rows is None else rows
 
         return [
             [
                 np.load(self.manifest[r][col], mmap_mode="r")
                 if col in self.array_columns
                 else self.manifest[r][col]
-                for r in row_idxs
+                for r in rows
             ]
             for col in columns
         ]
