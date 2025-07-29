@@ -234,7 +234,6 @@ class AVRFTTrainer(BaseTrainer):
             latent_vid, latent_aud = gather_concat(latent_vid).cpu(), gather_concat(latent_aud).cpu()
             if self.rank == 0:
                 eval_dir = Path(self.train_cfg.eval_sample_dir)
-                eval_dir = eval_dir / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
                 eval_dir.mkdir(parents=True, exist_ok=True)
                 torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
                 torch.save(latent_aud, eval_dir / f"aud.{self.total_step_counter}.pt")
