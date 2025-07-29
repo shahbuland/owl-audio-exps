@@ -1,14 +1,13 @@
-import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .normalization import LayerNorm
+from .normalization import layer_norm
+
 
 class AdaLN(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.fc = nn.Linear(dim, 2 * dim)
-        self.norm = LayerNorm(dim)
 
     def forward(self, x, cond):
         # cond: [b, n, d], x: [b, n*m, d]
@@ -23,7 +22,7 @@ class AdaLN(nn.Module):
         ab = ab.reshape(b, nm, 2*d)        # [b, nm, 2d]
 
         a, b_ = ab.chunk(2, dim=-1)        # [b, nm, d] each
-        x = self.norm(x) * (1 + a) + b_
+        x = layer_norm(x) * (1 + a) + b_
         return x
 
 class Gate(nn.Module):
@@ -42,3 +41,23 @@ class Gate(nn.Module):
         c = c.view(b, n, 1, d).expand(-1, -1, m, -1).reshape(b, nm, d)
 
         return c * x
+
+
+def cond_adaln(x, scale, bias):
+    # scale,bias: [b, n, d], x: [b, n*m, d]
+    b, nm, d = *x.shape[:2], x.size(-1)
+    n = scale.size(1)
+    m = nm // n
+    # broadcast [b,n,d] → [b,n*m,d]
+    scale = scale.view(b, n, 1, d).expand(-1,-1,m,-1).reshape(b, nm, d)
+    bias  = bias .view(b, n, 1, d).expand(-1,-1,m,-1).reshape(b, nm, d)
+    x_norm = layer_norm(x)
+    return x_norm * (1 + scale) + bias
+
+def cond_gate(x, gate):
+    # gate: [b, n, d], x: [b, n*m, d]
+    b, nm, d = *x.shape[:2], x.size(-1)
+    n = gate.size(1)
+    m = nm // n
+    gate = gate.view(b, n, 1, d).expand(-1,-1,m,-1).reshape(b, nm, d)
+    return gate * x

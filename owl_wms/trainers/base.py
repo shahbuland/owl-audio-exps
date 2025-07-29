@@ -31,7 +31,7 @@ class BaseTrainer:
                 wandb.login(key=wandb_api_key)
             else:
                 raise Exception("WANDB key not found, did you correctly load your .env file?")
-            
+
             wandb.init(
                 project = log.project,
                 entity = log.name,
@@ -41,7 +41,7 @@ class BaseTrainer:
                     'model' : model_cfg
                 }
             )
-        
+
     def barrier(self):
         if self.world_size > 1:
             dist.barrier()
@@ -57,7 +57,7 @@ class BaseTrainer:
                 return self.ema.ema_model.module
             else:
                 return self.model.module
-    
+
     def save(self, save_dict):
         os.makedirs(self.train_cfg.checkpoint_dir, exist_ok = True)
         fp = os.path.join(self.train_cfg.checkpoint_dir, f"step_{self.total_step_counter}.pt")
@@ -70,8 +70,6 @@ class BaseTrainer:
             out_d = {k[len(prefix):]: v for k, v in out_d.items() if k.startswith(prefix)}
             os.makedirs(self.train_cfg.output_path, exist_ok = True)
             torch.save(out_d, os.path.join(self.train_cfg.output_path, f"step_{self.total_step_counter}.pt"))
-    
+
     def load(self, path):
         return torch.load(path, map_location=f'cuda:{self.local_rank}',weights_only=False)
-
-            

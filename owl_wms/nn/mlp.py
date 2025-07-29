@@ -11,7 +11,7 @@ class MLPCustom(nn.Module):
 
         nn.init.kaiming_normal_(self.fc1.weight)
         nn.init.kaiming_normal_(self.fc2.weight)
-        
+
         nn.init.zeros_(self.fc1.bias)
         nn.init.zeros_(self.fc2.bias)
 
