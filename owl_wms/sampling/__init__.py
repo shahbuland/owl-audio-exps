@@ -23,3 +23,9 @@ def get_sampler_cls(sampler_id):
         """
         from .av_window import CausalAVWindowSamplerNoCFG
         return CausalAVWindowSamplerNoCFG
+    elif sampler_id == "av_caching_one_step":
+        """
+        Identical to av_caching but with a hard assumption for one step to simplify
+        """
+        from .av_caching import AVCachingOneStepSampler
+        return AVCachingOneStepSampler
