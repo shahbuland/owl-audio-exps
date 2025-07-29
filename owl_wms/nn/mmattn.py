@@ -147,7 +147,6 @@ class MMDIT(nn.Module):
         )
 
     def forward(self, x0, x1, cond, kv_cache=None):
-        print("x0.shape, x1.shape", x0.shape, x1.shape)
         local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.local_window)
         global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.global_window)
         cond0, cond1 = self.cond_proj(cond).chunk(2, dim=-1)
