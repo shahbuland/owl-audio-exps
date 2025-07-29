@@ -134,7 +134,7 @@ class AVCachingSampler:
             kv_cache=kv_cache,
         )
         kv_cache.disable_cache_updates()
-        kv_cache.truncate(1, front=False)  # new "still-being-denoised" frame from kv cache
+        kv_cache.truncate(1, front=True)  # new "still-being-denoised" frame from kv cache
 
         # Euler update for step‑0 (affects only the *last* frame)
         new_vid -= eps_v[:, -1:] * dt[0]
