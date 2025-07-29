@@ -123,8 +123,8 @@ class MMDIT(nn.Module):
         # layer attention pattern is [global, local, local, local, global, ...]
         #self.local_layers = [~(layer_idx % 4 == 0) for layer_idx in range(config.n_layers)]
         self.local_layers = [((layer_idx + 1) % 2 == 0) for layer_idx in range(config.n_layers)]
-        self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32))
-        self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32))
+        self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32), persistent=False)
+        self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32), persistent=False)
 
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
