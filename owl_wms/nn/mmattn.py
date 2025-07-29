@@ -1,293 +1,154 @@
 import torch
 from torch import nn
-import torch.nn.functional as F
 
-from .normalization import LayerNorm, RMSNorm, QKNorm
+from .normalization import layer_norm
 from .mlp import MLP
 
 import einops as eo
 
-from .modulation import AdaLN, Gate
-from .rope import FlatVideoRoPE
+from .modulation import cond_adaln, cond_gate
+from .rope import AVRoPE
+from .attn import create_causal_block_mask
 
-torch.backends.cuda.enable_flash_sdp(enabled = True)
+from torch.nn.attention.flex_attention import flex_attention
 
 from einops._torch_specific import allow_ops_in_compiled_graph
 allow_ops_in_compiled_graph()
+
+
+flex_attention = torch.compile(flex_attention, dynamic=True)
 
 """
 This code makes the assumption that there are some
 tokens from another modality that must always be attended to
 """
 
-def create_block_causal_mask_with_mm(tokens, context_tokens, tokens_per_frame):
-    frames = tokens // tokens_per_frame
-    
-    # Create base causal mask, nothing is masked
-    total_tokens = tokens + context_tokens
-    mask = torch.zeros(total_tokens, total_tokens)
-    
-    # Allow attention within each frame
-    for i in range(frames):
-        start = i * tokens_per_frame
-        end = (i + 1) * tokens_per_frame
-        mask[start:end, end:tokens] = True # Can't see future frames
-    
-    # Context tokens can only attend to themselves
-    mask[tokens:, :tokens] = True # Mask out attention to regular tokens
-    
-    # Regular tokens can still attend to all context tokens (no masking needed)
-    # The zeros in mask[:, tokens:] allow tokens to attend to all context
-    
-    return mask
 
 class MMAttn(nn.Module):
     """
     MMDiT style attention
     """
-    def __init__(self, config : 'TransformerConfig'):
+    def __init__(self, config, layer_idx):
         super().__init__()
-
-        self.n_heads = config.n_heads
-
-        self.qkv_1 = nn.Linear(config.d_model, 3 * config.d_model)
-        self.qkv_2 = nn.Linear(config.d_model, 3 * config.d_model)
-
-        self.out_1 = nn.Linear(config.d_model, config.d_model)
-        self.out_2 = nn.Linear(config.d_model, config.d_model)
-
-        self.qk_norm_1 = QKNorm(config.d_model // config.n_heads)
-        self.qk_norm_2 = QKNorm(config.d_model // config.n_heads)
-
         self.config = config
-        self.causal = config.causal
+        self.layer_idx = layer_idx
+        self.n_heads = config.n_heads
+        self.tok_per_frame_mod = [self.config.sample_size ** 2, 1]
 
-        self.rope = FlatVideoRoPE(config)
+        self.qkv_projs = nn.ModuleList([nn.Linear(config.d_model, 3 * config.d_model) for _ in range(2)])
+        self.out_projs = nn.ModuleList([nn.Linear(config.d_model, config.d_model)for _ in range(2)])
+        self.rope = AVRoPE(config)
 
-    def split(self, qkv):
-        return eo.rearrange(qkv, 'b n (three h d) -> three b h n d', three = 3, h = self.n_heads)
+    def split_qkv(self, qkv, tok_per_frm):
+        return eo.rearrange(qkv, 'b (f n) (three h d) -> three b h f n d', n=tok_per_frm, three=3, h=self.n_heads)
 
-    def merge(self, x):
-        return eo.rearrange(x, 'b h n d -> b n (h d)')
+    def forward(self, x0, x1, block_mask=None, kv_cache=None):
+        """MMDiT Attention: Calculate qkv separately per modality, interleave and concat, SDPA, separate"""
+        # calculate qkvs for each modality: qkv is list of triplets
+        qkvs = [
+            self.split_qkv(self.qkv_projs[i](x), self.tok_per_frame_mod[i]).unbind(0)
+            for i, x in enumerate([x0, x1])
+        ]
+        # concat along tok-per-frame of [(b, h, f, 64, d), (b, h, f, 1, d)] and flatten to interleave modalities
+        q, k, v = [torch.cat(groups, dim=3) for groups in zip(*qkvs)]
+        q, k, v = [eo.rearrange(x, 'b h f n d -> b h (f n) d') for x in [q, k, v]]
 
-    def forward(self, x_1, x_2, kv_cache=None):
-        n1 = x_1.shape[1]
+        q, k = layer_norm(q), layer_norm(k)
 
-        q1,k1,v1 = self.split(self.qkv_1(x_1))
-        q2,k2,v2 = self.split(self.qkv_2(x_2))
+        # rotate new queries and keys (shared kv cache between modalities)
+        offset = kv_cache.length_at(self.layer_idx) if kv_cache is not None else 0
+        q = self.rope(q, offset=offset)
+        k = self.rope(k, offset=offset)
 
-        q1,k1 = self.qk_norm_1(q1,k1)
-        q2,k2 = self.qk_norm_2(q2,k2)
+        # prepend cached values
+        if offset > 0:
+            old_k, old_v = kv_cache.get(self.layer_idx)
+            k = torch.cat([old_k, k], dim=2)
+            v = torch.cat([old_v, v], dim=2)
 
-        if not self.causal or (kv_cache is not None and len(kv_cache) > 0):
-            mask = None
-        else:
-            mask = create_block_causal_mask_with_mm(x_1.shape[1], x_2.shape[1], self.config.tokens_per_frame)
-            mask = mask.to(device=x_1.device,dtype=x_1.dtype)
-            mask = mask.unsqueeze(0).repeat(x_1.shape[0],1,1)
-            mask = mask.unsqueeze(1) # head dim
+        # update cache
+        if kv_cache is not None and kv_cache.should_update:
+            kv_cache.update(k.clone(), v.clone(), self.layer_idx)
 
-        if kv_cache is not None:
-            if len(kv_cache) > 0:
-                old_k, old_v = kv_cache.get(self.layer_ind)
-                
-                new_k = torch.cat([old_k, k1], dim=2).contiguous()
-                new_v = torch.cat([old_v, v1], dim=2).contiguous()
-            else:
-                new_k = k1.contiguous()
-                new_v = v1.contiguous()
+        # Attention & merge heads
+        attn_out = flex_attention(q, k, v, block_mask=block_mask)
+        attn_out = eo.rearrange(attn_out, 'b h n d -> b n (h d)')
 
-            if kv_cache.should_update:
-                kv_cache.update(new_k, new_v, self.layer_ind)
+        # Split into original modalities + out proj
+        V = self.config.sample_size**2
+        x0, x1 = eo.rearrange(attn_out, 'b (f n) d -> b f n d', n=V + 1).split([V, 1], dim=2)
+        x0, x1 = x0.flatten(1, 2), x1.flatten(1, 2)
 
-            q1, new_k = self.rope(q1, new_k)
+        x0 = self.out_projs[0](x0).contiguous()
+        x1 = self.out_projs[1](x1).contiguous()
 
-            k = torch.cat([new_k, k2], dim=-2)
-            v = torch.cat([new_v, v2], dim=-2)
-            q = torch.cat([q1, q2], dim=-2)
+        return x0, x1
 
-            x = F.scaled_dot_product_attention(q, k, v, attn_mask = mask)
-            x = x[:,:,-q.shape[2]:] # Only keep latest outputs
-            x = self.merge(x)
-        else:
-            q1, k1 = self.rope(q1,k1)
-
-            q = torch.cat([q1,q2],dim=-2)
-            k = torch.cat([k1,k2],dim=-2) 
-            v = torch.cat([v1,v2],dim=-2)
-
-            x = F.scaled_dot_product_attention(q,k,v, attn_mask = mask)
-            x = self.merge(x)
-
-        x_1, x_2 = x[:,:n1], x[:,n1:]
-        x_1 = self.out_1(x_1)
-        x_2 = self.out_2(x_2)
-
-        return x_1, x_2
 
 class MMDiTBlock(nn.Module):
+    def __init__(self, config, layer_idx):
+        super().__init__()
+        self.attn = MMAttn(config, layer_idx)
+        self.mlps = nn.ModuleList([MLP(config) for _ in range(2)])
+
+    def forward(self, x0, x1, cond0, cond1, block_mask=None, kv_cache=None):
+        # Conditioning inputs
+        attn_scale0, attn_bias0, attn_gate0, mlp_scale0, mlp_bias0, mlp_gate0 = cond0.chunk(6, dim=-1)
+        attn_scale1, attn_bias1, attn_gate1, mlp_scale1, mlp_bias1, mlp_gate1 = cond1.chunk(6, dim=-1)
+
+        # Conditioned Attention
+        r0, r1 = x0, x1
+        x0, x1 = cond_adaln(x0, attn_scale0, attn_bias0), cond_adaln(x1, attn_scale1, attn_bias1)
+        x0, x1 = self.attn(x0, x1, block_mask, kv_cache)
+        x0, x1 = cond_gate(x0, attn_gate0), cond_gate(x1, attn_gate1)
+        x0, x1 = (r0 + x0), (r1 + x1)
+
+        # Conditioned MLP
+        r0, r1 = x0, x1
+        x0, x1 = cond_adaln(x0, mlp_scale0, mlp_bias0), cond_adaln(x1, mlp_scale1, mlp_bias1)
+        x0, x1 = self.mlps[0](x0), self.mlps[1](x1)
+        x0, x1 = cond_gate(x0, mlp_gate0), cond_gate(x1, mlp_gate1)
+        x0, x1 = (r0 + x0), (r1 + x1)
+
+        return x0, x1
+
+
+class MMDIT(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
 
-        dim = config.d_model
+        # layer attention pattern is [global, local, local, local, global, ...]
+        self.local_layers = [~(layer_idx % 4 == 0) for layer_idx in range(config.n_layers)]
+        self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32), persistent=False)
+        self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32), persistent=False)
 
-        self.attn = MMAttn(config)
-        
-        self.mlp_1 = MLP(config)
-        self.mlp_2 = MLP(config)
+        self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
-        # Stream 1 - AdaLN and gating
-        self.adaln1_1 = AdaLN(dim)
-        self.gate1_1 = Gate(dim)
-        self.adaln2_1 = AdaLN(dim)
-        self.gate2_1 = Gate(dim)
+        # DiT-Air
+        self.cond_proj = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(config.d_model, config.d_model * 2 * 2 * 3)
+        )
 
-        # Stream 2 - Standard LayerNorm
-        self.ln1_2 = nn.LayerNorm(dim)
-        self.ln2_2 = nn.LayerNorm(dim)
+    def get_block_mask(self, x0, x1, kv_cache, window_len):
+        if not self.config.causal:
+            return None
+        seq_len = x0.shape[1] + x1.shape[1]
+        offset = kv_cache.length_at(0) if kv_cache is not None else 0
+        return create_causal_block_mask(
+            n_tokens=seq_len + offset,
+            tokens_per_frame=self.config.tokens_per_frame,
+            n_cached_tokens=offset,
+            window_len=window_len,
+            device=x0.device
+        )
 
-    def forward(self, x, y, cond, kv_cache = None):
-        res1_x = x.clone()
-        res1_y = y.clone()
-        
-        # First attention block
-        x = self.adaln1_1(x, cond)
-        y = self.ln1_2(y)
-        
-        x, y = self.attn(x, y, kv_cache)
-        
-        x = self.gate1_1(x, cond)
-        
-        x = res1_x + x
-        y = res1_y + y
-        
-        # Second MLP block
-        res2_x = x.clone()
-        res2_y = y.clone()
-        
-        x = self.adaln2_1(x, cond)
-        y = self.ln2_2(y)
-        
-        x = self.mlp_1(x)
-        y = self.mlp_2(y)
-        
-        x = self.gate2_1(x, cond)
-        
-        x = res2_x + x
-        y = res2_y + y
-
-        return x, y
-
-class MMUViT(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
-        blocks = []
-        for i in range(config.n_layers):
-            blocks.append(MMDiTBlock(config))
-            blocks[-1].attn.layer_ind = i
-
-        self.blocks = nn.ModuleList(blocks)
-
-        # For odd number of layers, need linear projections for skip connections
-        n_skip_connections = config.n_layers // 2
-        skip_projs = []
-        for _ in range(n_skip_connections):
-            skip_projs.append(nn.Linear(config.d_model * 2, config.d_model))
-        self.skip_projs = nn.ModuleList(skip_projs)
-
-    def forward(self, x, y, cond, kv_cache = None):
-        # Cache early block outputs for skip connections
-        early_features = []
-        n_blocks = len(self.blocks)
-        mid_idx = n_blocks // 2
-
-        # Early blocks
-        for i in range(mid_idx):
-            x,y = self.blocks[i](x, y, cond, kv_cache)
-            early_features.append(x)
-
-        # Middle block (if odd number of layers)
-        x,y = self.blocks[mid_idx](x, y, cond, kv_cache)
-
-        # Late blocks with skip connections
-        for i in range(mid_idx + 1, n_blocks):
-            # Get corresponding early block output
-            early_idx = n_blocks - 1 - i
-            early_feat = early_features[early_idx]
-            
-            # Concatenate early and current features
-            skip_idx = i - (mid_idx + 1)
-            x = torch.cat([x, early_feat], dim=-1)
-            x = self.skip_projs[skip_idx](x)
-            
-            x,y = self.blocks[i](x, y, cond, kv_cache)
-
-        return x
-
-
-def test_fwd_with_cache():
-    from ..configs import TransformerConfig
-    from .kv_cache import KVCache
-
-    import matplotlib.pyplot as plt
-
-    cfg = TransformerConfig(
-        None,
-        6,
-        6,
-        384,
-        1,
-        128,
-        4,
-        0.1,
-        8,
-        16,
-        True
-    )
-
-    model = MMUViT(cfg).bfloat16().cuda()
-
-    NUM_FRAMES = 10
-    x = torch.randn(1,16*NUM_FRAMES,384).bfloat16().cuda()
-    y = torch.randn(1,16,384).bfloat16().cuda()
-    cond=torch.randn(1,16,384).bfloat16().cuda()
-
-    cache = KVCache(cfg).to(device='cuda',dtype=torch.bfloat16)
-    cache.reset(1)
-    
-    with torch.no_grad():
-        cache.enable_cache_updates()
-        out = model(x,y,cond,cache)
-
-        new_x = torch.randn(1,16,384).bfloat16().cuda()
-        cond = torch.randn(1,1,384).bfloat16().cuda()
-
-        print(len(cache))
-        print(cache.cache[0][0].shape)
-        new_out = model(new_x, y, cond, cache)
-
-        print(len(cache))
-        print(cache.cache[0][0].shape)
-
-def test_mask():
-    import matplotlib.pyplot as plt
-
-    n_frames = 10
-    n_tok_per_frame = 16
-    n_context = 16
-
-    mask = create_block_causal_mask_with_mm(n_frames*n_tok_per_frame, n_context, n_tok_per_frame)
-
-    plt.figure(figsize=(10,10))
-    plt.imshow(mask.float().cpu().numpy(), cmap='gray')
-    plt.colorbar()
-    plt.title(f'Block Causal Mask with MM ({n_frames*n_tok_per_frame} tokens, {n_context} context, {n_tok_per_frame} per frame)')
-    plt.xlabel('Key Position')
-    plt.ylabel('Query Position') 
-    plt.savefig('test_mm_mask.png')
-    plt.close()
-
-
-if __name__ == "__main__":
-    test_mask()
+    def forward(self, x0, x1, cond, kv_cache=None):
+        local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.local_window)
+        global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.global_window)
+        cond0, cond1 = self.cond_proj(cond).chunk(2, dim=-1)
+        for layer_idx, block in enumerate(self.blocks):
+            block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask
+            x0, x1 = block(x0, x1, cond0, cond1, block_mask, kv_cache)
+        return x0, x1

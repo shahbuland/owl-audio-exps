@@ -2,7 +2,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-import einops as eo
+
+def layer_norm(x: torch.Tensor) -> torch.Tensor:
+    return F.layer_norm(x, (x.size(-1),)).type_as(x)
+
+
+def rms_norm(x: torch.Tensor) -> torch.Tensor:
+    return F.rms_norm(x, (x.size(-1),))
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim):
@@ -11,7 +18,7 @@ class RMSNorm(nn.Module):
         # small init to default to no gain
         self.gain = nn.Parameter(torch.randn(dim) * 0.02)
         self.eps = 1e-6
-    
+
     def forward(self, x):
         # x: [b, h, n, d]
         rms = x.float().pow(2).mean(dim=-1, keepdim=True)  # [b,h,n,1]
@@ -27,15 +34,10 @@ class L2Norm(nn.Module):
         x = F.normalize(x, dim = -1)
         return x
 
+
 class QKNorm(nn.Module):
     def __init__(self, dim):
         super().__init__()
 
-        self.q_norm = RMSNorm(dim)
-        self.k_norm = RMSNorm(dim)
-
     def forward(self, q, k):
-        return self.q_norm(q), self.k_norm(k)
-
-def LayerNorm(dim):
-    return nn.LayerNorm(dim, elementwise_affine = False)
+        return layer_norm(q), layer_norm(k)

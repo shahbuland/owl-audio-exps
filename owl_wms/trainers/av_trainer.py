@@ -1,14 +1,16 @@
-import torch
 from ema_pytorch import EMA
+from pathlib import Path
+import tqdm
 import wandb
-import torch.nn.functional as F
+import gc
+
+import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
-import einops as eo
 
 from .base import BaseTrainer
 
-from ..utils import freeze, Timer, find_unused_params
+from ..utils import freeze, Timer
 from ..schedulers import get_scheduler_cls
 from ..models import get_model_cls
 from ..sampling import get_sampler_cls
@@ -28,7 +30,7 @@ class AVRFTTrainer(BaseTrainer):
     :param local_rank: Rank for current device on this process.
     :param world_size: Overall number of devices
     """
-    def __init__(self,*args,**kwargs):  
+    def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
 
         model_id = self.model_cfg.model_id
@@ -70,7 +72,7 @@ class AVRFTTrainer(BaseTrainer):
         if self.scheduler is not None:
             save_dict['scheduler'] = self.scheduler.state_dict()
         super().save(save_dict)
-    
+
     def load(self):
         if hasattr(self.train_cfg, 'resume_ckpt') and self.train_cfg.resume_ckpt is not None:
             save_dict = super().load(self.train_cfg.resume_ckpt)
@@ -79,7 +81,7 @@ class AVRFTTrainer(BaseTrainer):
             print("Failed to load checkpoint")
             return
 
-        
+
         self.model.load_state_dict(save_dict['model'])
         self.ema.load_state_dict(save_dict['ema'])
         self.opt.load_state_dict(save_dict['opt'])
@@ -90,6 +92,7 @@ class AVRFTTrainer(BaseTrainer):
 
     def train(self):
         torch.cuda.set_device(self.local_rank)
+        print(f"Device used: rank={self.rank}")
 
         # Prepare model and ema
         self.model = self.model.cuda().train()
@@ -108,12 +111,6 @@ class AVRFTTrainer(BaseTrainer):
             update_every = 1
         )
         #torch.compile(self.ema.ema_model.module.core if self.world_size > 1 else self.ema.ema_model.core, dynamic=False, fullgraph=True)
-
-        def get_ema_core():
-            if self.world_size > 1:
-                return self.ema.ema_model.module.core
-            else:
-                return self.ema.ema_model.core
 
         # Set up optimizer and scheduler
         if self.train_cfg.opt.lower() == "muon":
@@ -136,12 +133,15 @@ class AVRFTTrainer(BaseTrainer):
         timer = Timer()
         timer.reset()
         metrics = LogHelper()
+
         if self.rank == 0:
-            wandb.watch(self.get_module(), log = 'all')
-        
+            wandb.watch(self.get_module(), log='all')
+
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
-        sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.n_samples, **self.train_cfg.sample_data_kwargs)
+
+        n_samples = (self.train_cfg.n_samples + self.world_size - 1) // self.world_size  # round up to next world_size
+        sample_loader = get_loader(self.train_cfg.sample_data_id, n_samples, **self.train_cfg.sample_data_kwargs)
         sample_loader = iter(sample_loader)
 
         if self.train_cfg.data_id == "cod_s3_mixed":
@@ -150,21 +150,22 @@ class AVRFTTrainer(BaseTrainer):
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
         local_step = 0
-        for _ in range(self.train_cfg.epochs):
-            for batch_vid, batch_audio, batch_mouse, batch_btn in loader:
-                batch_vid = batch_vid.cuda().bfloat16() / self.train_cfg.vae_scale
-                batch_audio = batch_audio.cuda().bfloat16() / self.train_cfg.audio_vae_scale
-                batch_mouse = batch_mouse.cuda().bfloat16()
-                batch_btn = batch_btn.cuda().bfloat16()
-                #cfg_mask = cfg_mask.cuda()
+        for epoch in range(self.train_cfg.epochs):
+            for batch in tqdm.tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
+
+                batch = [t.cuda().bfloat16() for t in batch]
+                batch_vid, batch_audio, batch_mouse, batch_btn = batch
+                batch_vid = batch_vid / self.train_cfg.vae_scale
+                batch_audio = batch_audio / self.train_cfg.audio_vae_scale
 
                 with ctx:
-                    loss = self.model(batch_vid,batch_audio,batch_mouse,batch_btn) / accum_steps
-
+                    loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
+                    loss = loss / accum_steps
                 self.scaler.scale(loss).backward()
-                #find_unused_params(self.model)
 
                 metrics.log('diffusion_loss', loss)
+                metrics.log('video_loss', video_loss)
+                metrics.log('audio_loss', audio_loss)
 
                 local_step += 1
                 if local_step % accum_steps == 0:
@@ -190,32 +191,14 @@ class AVRFTTrainer(BaseTrainer):
 
                         # Sampling commented out for now
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
-                            with ctx, torch.no_grad():
-
-                                vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-                                n_samples = self.train_cfg.n_samples
-                                samples, audio, sample_mouse, sample_button = sampler(
-                                    get_ema_core(),
-                                    vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
-                                    aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
-                                    mouse_for_sample.bfloat16().cuda(),
-                                    btn_for_sample.bfloat16().cuda(),
-                                    decode_fn,
-                                    audio_decode_fn,
-                                    self.train_cfg.vae_scale,
-                                    self.train_cfg.audio_vae_scale
-                                ) # -> [b,n,c,h,w]
+                            with ctx:
+                                eval_wandb_dict = self.eval_step(
+                                    sample_loader, sampler, decode_fn, audio_decode_fn
+                                )
+                                gc.collect(); torch.cuda.empty_cache()
                                 if self.rank == 0:
-                                    wandb_av_out = to_wandb_av(samples, audio, sample_mouse, sample_button)
-                                    if len(wandb_av_out) == 3:  
-                                        video, depth_gif, flow_gif = wandb_av_out
-                                        wandb_dict['samples'] = video
-                                        wandb_dict['depth_gif'] = depth_gif
-                                        wandb_dict['flow_gif'] = flow_gif
-                                    else:
-                                        video = wandb_av_out
-                                        wandb_dict['samples'] = video
-                            
+                                    wandb_dict.update(eval_wandb_dict)
+
                         if self.rank == 0:
                             wandb.log(wandb_dict)
 
@@ -223,5 +206,54 @@ class AVRFTTrainer(BaseTrainer):
                     if self.total_step_counter % self.train_cfg.save_interval == 0:
                         if self.rank == 0:
                             self.save()
-                        
+
                     self.barrier()
+
+    def eval_step(self, sample_loader, sampler, decode_fn, audio_decode_fn):
+        # ---- Generation Run ----
+        vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
+        video_out, audio_out, latent_vid, latent_aud, mouse, button = sampler(
+            self.get_module(ema=True).core,
+            vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
+            aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
+            mouse_for_sample.bfloat16().cuda(),
+            btn_for_sample.bfloat16().cuda(),
+            decode_fn,
+            audio_decode_fn,
+            self.train_cfg.vae_scale,
+            self.train_cfg.audio_vae_scale
+        )  # -> [b,n,c,h,w]
+
+        def gather_concat(t, dim=0):
+            buf = [torch.zeros_like(t) for _ in range(self.world_size)]
+            dist.all_gather(buf, t)
+            return torch.cat(buf, dim=dim)
+
+        # ---- Save Latent Artifacts ----
+        if getattr(self.train_cfg, "eval_sample_dir", None):
+            latent_vid, latent_aud = gather_concat(latent_vid).cpu(), gather_concat(latent_aud).cpu()
+            if self.rank == 0:
+                eval_dir = Path(self.train_cfg.eval_sample_dir)
+                eval_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
+                torch.save(latent_aud, eval_dir / f"aud.{self.total_step_counter}.pt")
+
+            del latent_vid, latent_aud
+            gc.collect(); torch.cuda.empty_cache()
+
+        # ---- Generate Media Artifacts ----
+        video_out, audio_out, mouse, button = [
+            gather_concat(x, dim=0).cpu() for x in [video_out, audio_out, mouse, button]
+        ]
+        if self.rank == 0:
+            wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
+            if len(wandb_av_out) == 3:
+                video, depth_gif, flow_gif = wandb_av_out
+                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif, flow_gif=flow_gif)
+            else:
+                eval_wandb_dict = dict(samples=wandb_av_out)
+        else:
+            eval_wandb_dict = None
+        dist.barrier()
+
+        return eval_wandb_dict

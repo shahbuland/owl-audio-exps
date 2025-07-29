@@ -77,7 +77,7 @@ def to_wandb(x, batch_mouse, batch_btn, gather = False, max_samples = 8):
     if max_samples == 8:
         x = eo.rearrange(x, '(r c) n d h w -> n d (r h) (c w)', r = 2, c = 4)
 
-    return wandb.Video(x, format='gif',fps=60)
+    return wandb.Video(x, format='gif', fps=60, max_outputs=16)
 
 def to_wandb_gif(x, max_samples = 4):
     x = x.clamp(-1, 1)
