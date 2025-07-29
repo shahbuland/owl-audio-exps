@@ -37,7 +37,3 @@ class QKNorm(nn.Module):
 
     def forward(self, q, k):
         return layer_norm(q), layer_norm(k)
-
-def LayerNorm(dim):
-    # TODO: remove and replace with `def layer_norm` above
-    return nn.LayerNorm(dim, elementwise_affine = False)

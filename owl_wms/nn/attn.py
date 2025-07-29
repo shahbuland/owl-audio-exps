@@ -4,7 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from .normalization import LayerNorm, RMSNorm, QKNorm
+from .normalization import RMSNorm, QKNorm
 from .mlp import MLP
 
 
