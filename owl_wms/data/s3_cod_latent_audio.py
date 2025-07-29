@@ -55,17 +55,15 @@ class WindowedViewDataset(Dataset):
 
     def __getitem__(self, idx):
         row, start = self._index[idx]
+        column_arrays = self.table.get(self.columns, rows=[row])
         return {
-            col: torch.from_numpy(self.table[col][row][start: start + self.window_length])
-            for col in self.columns
+            col: torch.from_numpy(arr_list[0][start: start + self.window_length])
+            for col, arr_list in zip(self.columns, column_arrays)
         }
 
 
 def collate_fn(batch):
-    stacked = {
-        k: torch.nan_to_num(torch.stack([item[k] for item in batch]), nan=0.0)  # TODO: preprocessing step instead
-        for k in batch[0]
-    }
+    stacked = {k: torch.stack([item[k] for item in batch]) for k in batch[0]}
     return [stacked[k] for k in ("video", "audio", "mouse", "buttons")]
 
 
@@ -85,10 +83,10 @@ def get_loader(batch_size, dataset_path, window_length):
         ds,
         batch_size=batch_size,
         collate_fn=collate_fn,
-        num_workers=8,
+        num_workers=2,
         drop_last=True,
         pin_memory=True,
-        prefetch_factor=8,
+        prefetch_factor=2,
         persistent_workers=True,
         **loader_kwargs
     )

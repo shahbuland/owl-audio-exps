@@ -46,28 +46,25 @@ class NpyTable:
 
     def __getitem__(self, key):
         if isinstance(key, str):
-            return self.get_columns([key])[0]
+            return self.get(columns=[key])[0]
         elif isinstance(key, (list, tuple)):
-            return self.get_columns(list(key))
+            return self.get(columns=list(key))
         else:
             raise KeyError(f"Invalid key: {key!r}")
 
-    def get_columns(self, columns: List[str]) -> List[List[Any]]:
-        """
-        For each name in `columns`, return a list of values across all rows.
-        Array columns return np.memmap objects; others return scalars.
-        """
+    def get(self, columns: List[str], row_idxs: List[int] | None = None) -> List[List[Any]]:
         invalid = set(columns) - set(self.columns)
         if invalid:
             raise KeyError(f"Unknown columns requested: {invalid}")
 
-        result = []
-        for key in columns:
-            if key in self.array_columns:
-                result.append([
-                    np.load(row[key], mmap_mode="r")
-                    for row in self.manifest
-                ])
-            else:
-                result.append([row[key] for row in self.manifest])
-        return result
+        row_idxs = range(len(self.manifest)) if row_idxs is None else row_idxs
+
+        return [
+            [
+                np.load(self.manifest[r][col], mmap_mode="r")
+                if col in self.array_columns
+                else self.manifest[r][col]
+                for r in row_idxs
+            ]
+            for col in columns
+        ]
