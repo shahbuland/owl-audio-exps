@@ -3,6 +3,7 @@ from ema_pytorch import EMA
 from pathlib import Path
 import tqdm
 import wandb
+import gc
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -194,6 +195,7 @@ class AVRFTTrainer(BaseTrainer):
                                 eval_wandb_dict = self.eval_step(
                                     sample_loader, sampler, decode_fn, audio_decode_fn
                                 )
+                                gc.collect(); torch.cuda.empty_cache()
                                 if self.rank == 0:
                                     wandb_dict.update(eval_wandb_dict)
 
@@ -229,17 +231,20 @@ class AVRFTTrainer(BaseTrainer):
 
         # ---- Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
-            latent_vid, latent_aud = gather_concat(latent_vid), gather_concat(latent_aud)
+            latent_vid, latent_aud = gather_concat(latent_vid).cpu(), gather_concat(latent_aud).cpu()
             if self.rank == 0:
                 eval_dir = Path(self.train_cfg.eval_sample_dir)
                 eval_dir = eval_dir / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
                 eval_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(latent_vid.cpu(), eval_dir / f"vid.{self.total_step_counter}.pt")
-                torch.save(latent_aud.cpu(), eval_dir / f"aud.{self.total_step_counter}.pt")
+                torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
+                torch.save(latent_aud, eval_dir / f"aud.{self.total_step_counter}.pt")
+
+            del latent_vid, latent_aud
+            gc.collect(); torch.cuda.empty_cache()
 
         # ---- Generate Media Artifacts ----
         video_out, audio_out, mouse, button = [
-            gather_concat(x, dim=0) for x in [video_out, audio_out, mouse, button]
+            gather_concat(x, dim=0).cpu() for x in [video_out, audio_out, mouse, button]
         ]
         if self.rank == 0:
             wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
