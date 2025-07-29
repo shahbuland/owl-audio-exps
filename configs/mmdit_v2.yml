@@ -59,7 +59,7 @@ train:
 
   checkpoint_dir: checkpoints/av_mmdit_v1
   output_path: /mnt/data/owl-wms/checkpoints/av_mmdit_v1
-  resume_ckpt: /mnt/data/lapp0/checkpoints/e9d5c38/step_50000.pt  #### null
+  resume_ckpt: null
 
   sample_interval: 5000
   save_interval: 10000

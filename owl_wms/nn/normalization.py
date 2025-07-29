@@ -4,8 +4,7 @@ import torch.nn.functional as F
 
 
 def layer_norm(x: torch.Tensor) -> torch.Tensor:
-    #return F.layer_norm(x, (x.size(-1),)).type_as(x)
-    return F.rms_norm(x, (x.size(-1),)).type_as(x)
+    return F.layer_norm(x, (x.size(-1),)).type_as(x)
 
 
 class RMSNorm(nn.Module):

@@ -86,8 +86,7 @@ class GameRFTAudioCore(nn.Module):
             video, audio = self.transformer(x, audio, cond, kv_cache)
 
         # Project video tokens
-        #video = self.proj_out(layer_norm(video), layer_norm(cond))
-        video = self.proj_out(video, cond)
+        video = self.proj_out(layer_norm(video), layer_norm(cond))
         video = video.reshape(b, n, h, w, c).permute(0, 1, 4, 2, 3) # bnchw
 
         # Project audio tokens
