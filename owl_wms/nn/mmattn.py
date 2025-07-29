@@ -43,9 +43,7 @@ class MMAttn(nn.Module):
         return eo.rearrange(qkv, 'b (f n) (three h d) -> three b h f n d', n=tok_per_frm, three=3, h=self.n_heads)
 
     def forward(self, x0, x1, block_mask=None, kv_cache=None):
-        """
-        For MMDiT we assume kv_cache is a tuple of two caches
-        """
+        """MMDiT Attention: Calculate qkv separately per modality, interleave and concat, SDPA, separate"""
         # calculate qkvs for each modality: qkv is list of triplets
         qkvs = [
             self.split_qkv(self.qkv_projs[i](x), self.tok_per_frame_mod[i]).unbind(0)
