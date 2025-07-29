@@ -36,7 +36,7 @@ class NpyTable:
             if key in self.array_columns:
                 path = self.directory / f"{key}_{idx}.npy"
                 np.save(path, val)
-                entry[key] = str(path)
+                entry[key] = f"{key}_{idx}.npy"
             else:
                 entry[key] = val
 
@@ -61,7 +61,7 @@ class NpyTable:
 
         return [
             [
-                np.load(self.manifest[r][col], mmap_mode="r")
+                np.load(self.directory / self.manifest[r][col], mmap_mode="r")
                 if col in self.array_columns
                 else self.manifest[r][col]
                 for r in rows

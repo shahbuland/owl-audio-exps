@@ -59,7 +59,7 @@ train:
 
   checkpoint_dir: checkpoints/av_mmdit_v1
   output_path: /mnt/data/owl-wms/checkpoints/av_mmdit_v1
-  resume_ckpt: null
+  resume_ckpt: /mnt/data/lapp0/checkpoints/mmdit_opt_final/checkpoints/step_30000.pt  # null
 
   sample_interval: 5000
   save_interval: 10000
@@ -74,7 +74,7 @@ train:
     only_return_generated: false
 
   n_samples: 4
-  eval_sample_dir: null  # /mnt/data/lapp0/eval_dump/av_mmdit_v2/
+  eval_sample_dir: /mnt/data/lapp0/eval_dump/av_mmdit_v2/
 
   vae_id: null
   vae_batch_size: 4
