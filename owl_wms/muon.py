@@ -118,14 +118,16 @@ class CombinedOptimizer(Optimizer):
         self.defaults = {}
 
         adamw_keys = kwargs.pop('adamw_keys', [])
-        if world_size > 1:
-            model = model.module
+        normalized_named_params = {
+            n.replace(".module", ".").replace("._orig_mod", "."): p
+            for n, p in model.named_parameters()
+        }
 
-        adamw_parameters = [p for n, p in model.named_parameters() if any(key in n for key in adamw_keys) or p.ndim < 2]
-        muon_parameters = [p for n, p in model.named_parameters() if not any(key in n for key in adamw_keys) and p.ndim >= 2]
+        adamw_parameters = [p for n, p in normalized_named_params.items() if any(key in n for key in adamw_keys) or p.ndim < 2]
+        muon_parameters = [p for n, p in normalized_named_params.items() if not any(key in n for key in adamw_keys) and p.ndim >= 2]
 
         # Check that all adamw_keys correspond to actual parameters
-        model_param_names = [n for n, _ in model.named_parameters()]
+        model_param_names = [n for n, _ in normalized_named_params.items()]
         for key in adamw_keys:
             assert any(key in name for name in model_param_names), f"AdamW key '{key}' not found in model parameters"
 
