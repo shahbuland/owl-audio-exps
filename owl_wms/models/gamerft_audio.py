@@ -33,7 +33,7 @@ class GameRFTAudioCore(nn.Module):
 
         self.backbone = config.backbone
 
-        self.transformer = torch.compile(backbone_cls(config), dynamic=True)
+        self.transformer = backbone_cls(config)
 
         if not config.uncond: self.control_embed = ControlEmbedding(config.n_buttons, config.d_model)
         self.t_embed = TimestepEmbedding(config.d_model)
@@ -104,7 +104,7 @@ class GameRFTAudio(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.core = GameRFTAudioCore(config)
+        self.core = torch.compile(GameRFTAudioCore(config))
         self.cfg_prob = config.cfg_prob
 
     def handle_cfg(self, has_controls = None, cfg_prob = None):

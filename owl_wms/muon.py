@@ -30,14 +30,14 @@ def zeropower_via_newtonschulz5(G: Tensor, steps: int) -> Tensor:
         A = X @ X.mT
         B = b * A + c * A @ A # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
         X = a * X + B @ X
-    
+
     if G.size(-2) > G.size(-1):
         X = X.mT
     return X
 
 class Muon(torch.optim.Optimizer):
     """
-    Modified version of muon optimizer that still works when world size is 1 
+    Modified version of muon optimizer that still works when world size is 1
     """
     def __init__(self, params, lr=0.02, weight_decay=0.01, momentum=0.95, nesterov=True, ns_steps=5, rank=None, world_size=None):
         if (rank is None) or (world_size is None):
@@ -116,18 +116,18 @@ class CombinedOptimizer(Optimizer):
     def __init__(self, model, rank=0, world_size=1, **kwargs):
         # We need this for the parent Optimizer class
         self.defaults = {}
-        
+
         adamw_keys = kwargs.pop('adamw_keys', [])
         if world_size > 1:
             adamw_keys = ['module.' + key for key in adamw_keys]
-        
+
         adamw_parameters = [p for n, p in model.named_parameters() if any(key in n for key in adamw_keys) or p.ndim < 2]
         muon_parameters = [p for n, p in model.named_parameters() if not any(key in n for key in adamw_keys) and p.ndim >= 2]
 
         # Check that all adamw_keys correspond to actual parameters
         model_param_names = [n for n, _ in model.named_parameters()]
         for key in adamw_keys:
-            assert any(key in name for name in model_param_names), f"AdamW key '{key}' not found in model parameters"
+            assert any(key in name for name in model_param_names), f"AdamW key '{key}' not found in model parameters" + str(model_param_names)
 
         # Initialize sub-optimizers
         self.adamw = AdamW(
@@ -157,10 +157,10 @@ class CombinedOptimizer(Optimizer):
         loss = None
         if closure is not None:
             loss = closure()
-        
+
         self.adamw.step()
         self.muon.step()
-        
+
         return loss
 
     def state_dict(self):
