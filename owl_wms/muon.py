@@ -118,10 +118,10 @@ class CombinedOptimizer(Optimizer):
         self.defaults = {}
 
         adamw_keys = kwargs.pop('adamw_keys', [])
-        normalized_named_params = {
-            n.replace(".module", ".").replace("._orig_mod", "."): p
-            for n, p in model.named_parameters()
-        }
+        if world_size > 1:
+            adamw_keys = ['module.' + key for key in adamw_keys]
+
+        normalized_named_params = {n.replace("_orig_mod", ""): p for n, p in model.named_parameters()}
 
         adamw_parameters = [p for n, p in normalized_named_params.items() if any(key in n for key in adamw_keys) or p.ndim < 2]
         muon_parameters = [p for n, p in normalized_named_params.items() if not any(key in n for key in adamw_keys) and p.ndim >= 2]
