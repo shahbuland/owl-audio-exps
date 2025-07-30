@@ -114,7 +114,7 @@ class AVRFTTrainer(BaseTrainer):
 
         # Set up optimizer and scheduler
         if self.train_cfg.opt.lower() == "muon":
-            self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
+            self.opt = init_muon(self.model.core, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
         else:
             self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
 
