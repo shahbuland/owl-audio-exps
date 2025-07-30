@@ -70,10 +70,6 @@ class GameRFTAudioCore(nn.Module):
         x = self.proj_in(x) # b(nhw)d
         audio = self.audio_proj_in(audio) # bnd
 
-        # input norm
-        x, audio = layer_norm(x), layer_norm(audio)
-
-
         if self.backbone == 'dit' or self.backbone == 'uvit':
             audio = audio.unsqueeze(-2) # bn1d
             x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
