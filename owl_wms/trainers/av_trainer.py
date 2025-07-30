@@ -183,6 +183,8 @@ class AVRFTTrainer(BaseTrainer):
                         self.scheduler.step()
                     self.ema.update()
 
+                    del loss, video_loss, audio_loss
+
                     # Do logging
                     with torch.no_grad():
                         wandb_dict = metrics.pop()
@@ -224,6 +226,13 @@ class AVRFTTrainer(BaseTrainer):
             self.train_cfg.audio_vae_scale
         )  # -> [b,n,c,h,w]
 
+        del vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample
+        video_out, audio_out, latent_vid, latent_aud, mouse, button = [
+            x.cpu() for x in [video_out, audio_out, latent_vid, latent_aud, mouse, button]
+        ]
+        gc.collect()
+        torch.cuda.empty_cache()
+
         def gather_concat(t, dim=0):
             buf = [torch.zeros_like(t) for _ in range(self.world_size)]
             dist.all_gather(buf, t)
@@ -231,19 +240,16 @@ class AVRFTTrainer(BaseTrainer):
 
         # ---- Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
-            latent_vid, latent_aud = gather_concat(latent_vid).cpu(), gather_concat(latent_aud).cpu()
+            latent_vid, latent_aud = gather_concat(latent_vid), gather_concat(latent_aud)
             if self.rank == 0:
                 eval_dir = Path(self.train_cfg.eval_sample_dir)
                 eval_dir.mkdir(parents=True, exist_ok=True)
                 torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
                 torch.save(latent_aud, eval_dir / f"aud.{self.total_step_counter}.pt")
 
-            del latent_vid, latent_aud
-            gc.collect(); torch.cuda.empty_cache()
-
         # ---- Generate Media Artifacts ----
         video_out, audio_out, mouse, button = [
-            gather_concat(x, dim=0).cpu() for x in [video_out, audio_out, mouse, button]
+            gather_concat(x, dim=0) for x in [video_out, audio_out, mouse, button]
         ]
         if self.rank == 0:
             wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
