@@ -129,7 +129,7 @@ class CombinedOptimizer(Optimizer):
         # Check that all adamw_keys correspond to actual parameters
         model_param_names = [n for n, _ in normalized_named_params.items()]
         for key in adamw_keys:
-            assert any(key in name for name in model_param_names), f"AdamW key '{key}' not found in model parameters"
+            assert any(key in name for name in model_param_names), f"AdamW key '{key}' not found in model parameters" + str(model_param_names)
 
         # Initialize sub-optimizers
         self.adamw = AdamW(
