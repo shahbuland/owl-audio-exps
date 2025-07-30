@@ -227,20 +227,22 @@ class AVRFTTrainer(BaseTrainer):
         )  # -> [b,n,c,h,w]
 
         del vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample
-        video_out, audio_out, latent_vid, latent_aud, mouse, button = [
-            x.cpu() for x in [video_out, audio_out, latent_vid, latent_aud, mouse, button]
-        ]
         gc.collect()
         torch.cuda.empty_cache()
 
-        def gather_concat(t, dim=0):
-            buf = [torch.zeros_like(t) for _ in range(self.world_size)]
-            dist.all_gather(buf, t)
-            return torch.cat(buf, dim=dim)
+        def gather_concat_cpu(t, dim=0, chunk_size=1 << 20):
+            def _gather_chunk(c):
+                buf = [torch.empty_like(c) for _ in range(self.world_size)]
+                dist.all_gather(buf, c)
+                return torch.cat([b.cpu() for b in buf], dim=dim)
+            return torch.cat(
+                [_gather_chunk(c) for c in torch.split(t, chunk_size, dim=dim)],
+                dim=dim
+            )
 
         # ---- Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
-            latent_vid, latent_aud = gather_concat(latent_vid), gather_concat(latent_aud)
+            latent_vid, latent_aud = gather_concat_cpu(latent_vid), gather_concat_cpu(latent_aud)
             if self.rank == 0:
                 eval_dir = Path(self.train_cfg.eval_sample_dir)
                 eval_dir.mkdir(parents=True, exist_ok=True)
@@ -249,7 +251,7 @@ class AVRFTTrainer(BaseTrainer):
 
         # ---- Generate Media Artifacts ----
         video_out, audio_out, mouse, button = [
-            gather_concat(x, dim=0) for x in [video_out, audio_out, mouse, button]
+            gather_concat_cpu(x, dim=0) for x in [video_out, audio_out, mouse, button]
         ]
         if self.rank == 0:
             wandb_av_out = to_wandb_av(video_out, audio_out, mouse, button)
