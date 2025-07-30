@@ -98,9 +98,6 @@ class AVRFTTrainer(BaseTrainer):
         self.model = self.model.cuda().train()
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
-            raw_model = self.model.module
-        else:
-            raw_model = self.model
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.audio_decoder = self.audio_decoder.cuda().eval().bfloat16()
 
@@ -117,9 +114,9 @@ class AVRFTTrainer(BaseTrainer):
 
         # Set up optimizer and scheduler
         if self.train_cfg.opt.lower() == "muon":
-            self.opt = init_muon(raw_model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
+            self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
         else:
-            self.opt = getattr(torch.optim, self.train_cfg.opt)(raw_model.parameters(), **self.train_cfg.opt_kwargs)
+            self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
 
         if self.train_cfg.scheduler is not None:
             self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)

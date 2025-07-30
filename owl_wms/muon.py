@@ -119,7 +119,7 @@ class CombinedOptimizer(Optimizer):
 
         adamw_keys = kwargs.pop('adamw_keys', [])
         if world_size > 1:
-            adamw_keys = ['module.' + key for key in adamw_keys]
+            model = model.module
 
         adamw_parameters = [p for n, p in model.named_parameters() if any(key in n for key in adamw_keys) or p.ndim < 2]
         muon_parameters = [p for n, p in model.named_parameters() if not any(key in n for key in adamw_keys) and p.ndim >= 2]
