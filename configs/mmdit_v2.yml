@@ -20,7 +20,7 @@ model:
   backbone: mmdit
 
   local_window: 16
-  global_window: 1000
+  global_window: 256
 
 train:
   trainer_id: av
@@ -37,7 +37,7 @@ train:
   target_batch_size: 8  # 512
   batch_size: 1  # 64 is possible
 
-  epochs: 1000
+  epochs: 10000
 
  # opt: AdamW
  # opt_kwargs:
