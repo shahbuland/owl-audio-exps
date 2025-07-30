@@ -80,7 +80,7 @@ class AVRoPE(RoPE):
         vid_freqs = freqs[:, :p, :p].reshape(config.n_frames, p**2, -1)  # top left square
         aud_freqs = freqs[:, -1, -1].unsqueeze(1)  # bottom right item
 
-        freqs = torch.cat([vid_freqs, aud_freqs], dim=1).flatten(0, 1)[..., ::2]
+        freqs = torch.cat([vid_freqs, aud_freqs], dim=1).flatten(0, 1)
         return freqs[..., ::2]  # subsampling
 
 
