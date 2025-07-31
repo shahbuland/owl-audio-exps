@@ -21,7 +21,7 @@ from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, mak
 
 
 torch._dynamo.config.capture_scalar_outputs = True
-# torch._dynamo.config.compiled_autograd = True
+torch._dynamo.config.compiled_autograd = True
 
 
 @torch.compile
@@ -136,7 +136,7 @@ class AVRFTTrainer(BaseTrainer):
         # Grad accum setup and scaler
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
         accum_steps = max(1, accum_steps)
-        ctx = torch.amp.autocast('cuda',torch.bfloat16)
+        ctx = torch.amp.autocast('cuda', torch.bfloat16)
 
         self.load()
 
