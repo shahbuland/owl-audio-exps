@@ -20,7 +20,8 @@ from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 
 
-torch._dynamo.config.compiled_autograd = True
+torch._dynamo.config.capture_scalar_outputs = True
+# torch._dynamo.config.compiled_autograd = True
 
 
 @torch.compile
@@ -178,10 +179,11 @@ class AVRFTTrainer(BaseTrainer):
 
                 local_step += 1
                 if local_step % accum_steps == 0:
-                    # Updates
+
+                    # Optimizer updates
                     if self.train_cfg.opt.lower() != "muon":
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-
+                    self.opt.step()
                     self.opt.zero_grad(set_to_none=True)
 
                     if self.scheduler is not None:
