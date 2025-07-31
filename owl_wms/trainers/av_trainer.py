@@ -24,7 +24,6 @@ torch._dynamo.config.capture_scalar_outputs = True
 torch._dynamo.config.compiled_autograd = True
 
 
-@torch.compile
 def fwd_bwd(model, accum_steps, *batch):
     loss, video_loss, audio_loss = model(*batch)
     loss = loss / accum_steps
