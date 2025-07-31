@@ -100,7 +100,7 @@ class AVRFTTrainer(BaseTrainer):
         self.model = self.model.cuda().train()
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
-        self.model = torch.compile(self.model, backend="aot_eager")
+        self.model = torch.compile(self.model)
 
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.audio_decoder = self.audio_decoder.cuda().eval().bfloat16()
@@ -164,7 +164,7 @@ class AVRFTTrainer(BaseTrainer):
                 with ctx:
                     loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
                     loss = loss / accum_steps
-                    with torch._dynamo.compiled_autograd._enable(torch.compile(backend="aot_eager")):
+                    with torch._dynamo.compiled_autograd._enable(torch.compile):
                         loss.backward()
 
                 metrics.log('diffusion_loss', loss)
