@@ -23,14 +23,6 @@ from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, mak
 torch._dynamo.config.capture_scalar_outputs = True
 
 
-def fwd_bwd(model, accum_steps, *batch):
-    loss, video_loss, audio_loss = model(*batch)
-    loss = loss / accum_steps
-    with torch._dynamo.compiled_autograd.enable(torch.compile(backend="aot_eager")):
-        loss.backward()
-    return loss, video_loss, audio_loss
-
-
 class AVRFTTrainer(BaseTrainer):
     """
     Trainer for rectified flow transformer
@@ -128,6 +120,7 @@ class AVRFTTrainer(BaseTrainer):
             self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
         else:
             self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
+        #self.opt.step = torch.compile(self.opt.step)
 
         if self.train_cfg.scheduler is not None:
             self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)
@@ -168,10 +161,11 @@ class AVRFTTrainer(BaseTrainer):
                 batch_vid = batch_vid / self.train_cfg.vae_scale
                 batch_audio = batch_audio / self.train_cfg.audio_vae_scale
                 with ctx:
-                    loss, video_loss, audio_loss = fwd_bwd(
-                        self.model, accum_steps,
-                        batch_vid, batch_audio, batch_mouse, batch_btn
-                    )
+                    loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
+                    loss = loss / accum_steps
+                    with torch._dynamo.compiled_autograd._enable(torch.compile(backend="aot_eager")):
+                        loss.backward()
+
                 metrics.log('diffusion_loss', loss)
                 metrics.log('video_loss', video_loss)
                 metrics.log('audio_loss', audio_loss)
