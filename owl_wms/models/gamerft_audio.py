@@ -100,7 +100,7 @@ class GameRFTAudio(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.core = torch.compile(GameRFTAudioCore(config))
+        self.core = GameRFTAudioCore(config)
         self.cfg_prob = config.cfg_prob
 
     def handle_cfg(self, has_controls = None, cfg_prob = None):

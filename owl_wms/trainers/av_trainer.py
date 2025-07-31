@@ -98,6 +98,8 @@ class AVRFTTrainer(BaseTrainer):
         self.model = self.model.cuda().train()
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
+        self.model = torch.compile(self.model, mode="max-autotune")
+
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.audio_decoder = self.audio_decoder.cuda().eval().bfloat16()
 
