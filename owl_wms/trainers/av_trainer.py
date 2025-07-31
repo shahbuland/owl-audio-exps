@@ -152,6 +152,7 @@ class AVRFTTrainer(BaseTrainer):
             self.barrier()
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
+        @torch.compile
         def fwd_bwd(batch):
             batch = [t.cuda().bfloat16() for t in batch]
             batch_vid, batch_audio, batch_mouse, batch_btn = batch
