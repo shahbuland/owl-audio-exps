@@ -23,6 +23,14 @@ from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, mak
 torch._dynamo.config.compiled_autograd = True
 
 
+@torch.compile
+def fwd_bwd(model, accum_steps, *batch):
+    loss, video_loss, audio_loss = model(*batch)
+    loss = loss / accum_steps
+    loss.backward()
+    return loss, video_loss, audio_loss
+
+
 class AVRFTTrainer(BaseTrainer):
     """
     Trainer for rectified flow transformer
@@ -48,7 +56,6 @@ class AVRFTTrainer(BaseTrainer):
         self.ema = None
         self.opt = None
         self.scheduler = None
-        self.scaler = None
 
         self.total_step_counter = 0
         self.decoder = get_decoder_only(
@@ -70,7 +77,6 @@ class AVRFTTrainer(BaseTrainer):
             'model' : self.model.state_dict(),
             'ema' : self.ema.state_dict(),
             'opt' : self.opt.state_dict(),
-            'scaler' : self.scaler.state_dict(),
             'steps': self.total_step_counter
         }
         if self.scheduler is not None:
@@ -91,7 +97,6 @@ class AVRFTTrainer(BaseTrainer):
         self.opt.load_state_dict(save_dict['opt'])
         if self.scheduler is not None and 'scheduler' in save_dict:
             self.scheduler.load_state_dict(save_dict['scheduler'])
-        self.scaler.load_state_dict(save_dict['scaler'])
         self.total_step_counter = save_dict['steps']
 
     def train(self):
@@ -130,7 +135,6 @@ class AVRFTTrainer(BaseTrainer):
         # Grad accum setup and scaler
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
         accum_steps = max(1, accum_steps)
-        self.scaler = torch.amp.GradScaler()
         ctx = torch.amp.autocast('cuda',torch.bfloat16)
 
         self.load()
@@ -155,24 +159,19 @@ class AVRFTTrainer(BaseTrainer):
             self.barrier()
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
-        @torch.compile
-        def fwd_bwd(batch):
-            batch = [t.cuda().bfloat16() for t in batch]
-            batch_vid, batch_audio, batch_mouse, batch_btn = batch
-            batch_vid = batch_vid / self.train_cfg.vae_scale
-            batch_audio = batch_audio / self.train_cfg.audio_vae_scale
-
-            loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
-            loss = loss / accum_steps
-            self.scaler.scale(loss).backward()
-            return loss, video_loss, audio_loss
-
         local_step = 0
         for epoch in range(self.train_cfg.epochs):
             for batch in tqdm.tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
 
+                batch = [t.cuda().bfloat16() for t in batch]
+                batch_vid, batch_audio, batch_mouse, batch_btn = batch
+                batch_vid = batch_vid / self.train_cfg.vae_scale
+                batch_audio = batch_audio / self.train_cfg.audio_vae_scale
                 with ctx:
-                    loss, video_loss, audio_loss = fwd_bwd(batch)
+                    loss, video_loss, audio_loss = fwd_bwd(
+                        self.model, accum_steps,
+                        batch_vid, batch_audio, batch_mouse, batch_btn
+                    )
                 metrics.log('diffusion_loss', loss)
                 metrics.log('video_loss', video_loss)
                 metrics.log('audio_loss', audio_loss)
@@ -181,13 +180,9 @@ class AVRFTTrainer(BaseTrainer):
                 if local_step % accum_steps == 0:
                     # Updates
                     if self.train_cfg.opt.lower() != "muon":
-                        self.scaler.unscale_(self.opt)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
 
-                    self.scaler.step(self.opt)
                     self.opt.zero_grad(set_to_none=True)
-
-                    self.scaler.update()
 
                     if self.scheduler is not None:
                         self.scheduler.step()
