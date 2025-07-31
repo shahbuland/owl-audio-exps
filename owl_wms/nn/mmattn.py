@@ -16,7 +16,7 @@ from einops._torch_specific import allow_ops_in_compiled_graph
 allow_ops_in_compiled_graph()
 
 
-flex_attention = torch.compile(flex_attention, dynamic=True)
+flex_attention = torch.compile(flex_attention)
 
 """
 This code makes the assumption that there are some
