@@ -21,13 +21,13 @@ from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, mak
 
 
 torch._dynamo.config.capture_scalar_outputs = True
-torch._dynamo.config.compiled_autograd = True
 
 
 def fwd_bwd(model, accum_steps, *batch):
     loss, video_loss, audio_loss = model(*batch)
     loss = loss / accum_steps
-    loss.backward()
+    with torch._dynamo.compiled_autograd.enable(torch.compile(backend="aot_eager")):
+        loss.backward()
     return loss, video_loss, audio_loss
 
 
