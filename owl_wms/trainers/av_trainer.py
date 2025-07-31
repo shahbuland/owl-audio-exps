@@ -21,6 +21,7 @@ from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, mak
 
 
 torch._dynamo.config.capture_scalar_outputs = True
+torch._dynamo.config.optimize_ddp = "python_reducer"  # needed for compiled backwards
 
 
 class AVRFTTrainer(BaseTrainer):
