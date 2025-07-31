@@ -19,6 +19,7 @@ from ..utils.logging import LogHelper, to_wandb_av
 from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 
+
 class AVRFTTrainer(BaseTrainer):
     """
     Trainer for rectified flow transformer
@@ -98,7 +99,7 @@ class AVRFTTrainer(BaseTrainer):
         self.model = self.model.cuda().train()
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
-        self.model = torch.compile(self.model, mode="max-autotune")
+        self.model = torch.compile(self.model)
 
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.audio_decoder = self.audio_decoder.cuda().eval().bfloat16()
@@ -151,20 +152,22 @@ class AVRFTTrainer(BaseTrainer):
             self.barrier()
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
+        def fwd_bwd(batch):
+            batch = [t.cuda().bfloat16() for t in batch]
+            batch_vid, batch_audio, batch_mouse, batch_btn = batch
+            batch_vid = batch_vid / self.train_cfg.vae_scale
+            batch_audio = batch_audio / self.train_cfg.audio_vae_scale
+
+            with ctx:
+                loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
+                loss = loss / accum_steps
+            self.scaler.scale(loss).backward()
+            return loss, video_loss, audio_loss
+
         local_step = 0
         for epoch in range(self.train_cfg.epochs):
             for batch in tqdm.tqdm(loader, total=len(loader), disable=self.rank != 0, desc=f"Epoch: {epoch}"):
-
-                batch = [t.cuda().bfloat16() for t in batch]
-                batch_vid, batch_audio, batch_mouse, batch_btn = batch
-                batch_vid = batch_vid / self.train_cfg.vae_scale
-                batch_audio = batch_audio / self.train_cfg.audio_vae_scale
-
-                with ctx:
-                    loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
-                    loss = loss / accum_steps
-                self.scaler.scale(loss).backward()
-
+                loss, video_loss, audio_loss = fwd_bwd(batch)
                 metrics.log('diffusion_loss', loss)
                 metrics.log('video_loss', video_loss)
                 metrics.log('audio_loss', audio_loss)
