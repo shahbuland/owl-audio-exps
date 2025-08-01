@@ -120,7 +120,7 @@ class AVRFTTrainer(BaseTrainer):
             self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
         else:
             self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
-        #self.opt.step = torch.compile(self.opt.step)
+        self.opt.step = torch.compile(self.opt.step)
 
         if self.train_cfg.scheduler is not None:
             self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)
