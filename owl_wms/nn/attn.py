@@ -1,21 +1,19 @@
 import torch
 import einops
 from torch import nn
-import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from .normalization import RMSNorm, QKNorm
+from .normalization import layer_norm
 from .mlp import MLP
 
 
 from .modulation import AdaLN, Gate
-from .rope import FlatVideoRoPE
+from .rope import VideoRoPE
 
-torch.backends.cuda.enable_flash_sdp(enabled = True)
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask, BlockMask
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 
-create_block_mask = torch.compile(create_block_mask, dynamic=True)
-flex_attention = torch.compile(flex_attention, dynamic=True)
+create_block_mask = torch.compile(create_block_mask)
+flex_attention = torch.compile(flex_attention)
 
 
 def checkpoint(function, *args, **kwargs):
@@ -23,9 +21,11 @@ def checkpoint(function, *args, **kwargs):
     return torch_checkpoint(function, *args, **kwargs)
 
 
-def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, window_len: int = None, n_cached_tokens: int = 0, device="cpu"):
+def create_causal_block_mask(
+        n_tokens: int, tokens_per_frame: int, window_len: int | None, n_cached_tokens: int = 0, device="cpu"
+):
     # Build n_tokens X n_tokens BlockMask which is causal and disallows wrapping
-    assert 0 <= n_cached_tokens < n_tokens, "kv cache cannot exceept total tokens"
+    assert 0 <= n_cached_tokens < n_tokens, "kv cache cannot exceed total tokens"
 
     frame_id = torch.arange(n_tokens, device=device, dtype=torch.int32) // tokens_per_frame
     n_frames = n_tokens // tokens_per_frame
@@ -51,55 +51,51 @@ def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, window_len: i
 
 
 class Attn(nn.Module):
-    def __init__(self, config : 'TransformerConfig'):
+    def __init__(self, config, layer_idx):
         super().__init__()
-
+        self.config = config
+        self.layer_idx = layer_idx
         self.n_heads = config.n_heads
 
         self.qkv = nn.Linear(config.d_model, 3 * config.d_model)
         self.out = nn.Linear(config.d_model, config.d_model)
-
-        self.qk_norm = QKNorm(config.d_model // config.n_heads)
-        self.layer_ind = None
-
-        self.rope = FlatVideoRoPE(config)
-        #self.rope = FrameRoPE(config)
+        self.rope = VideoRoPE(config)
 
     def forward(self, x, block_mask, kv_cache=None):
         B, L, _ = x.shape
 
         qkv = self.qkv(x)
         q, k, v = einops.rearrange(qkv, "b t (three h d) -> three b h t d", three=3, h=self.n_heads)
-        q, k = self.qk_norm(q, k)
-        q, k = q.type_as(v), k.type_as(v)
+        q, k = layer_norm(q), layer_norm(k)
 
-        # rotate new queries and keys
-        offset = kv_cache.length_at(self.layer_ind) if kv_cache is not None else 0
+        # rotate new queries and keys (shared kv cache between modalities)
+        offset = kv_cache.length_at(self.layer_idx) if kv_cache is not None else 0
         q = self.rope(q, offset=offset)
         k = self.rope(k, offset=offset)
 
         # prepend cached values
         if offset > 0:
-            old_k, old_v = kv_cache.get(self.layer_ind)
+            old_k, old_v = kv_cache.get(self.layer_idx)
             k = torch.cat([old_k, k], dim=2)
             v = torch.cat([old_v, v], dim=2)
 
         # update cache
         if kv_cache is not None and kv_cache.should_update:
-            kv_cache.update(k.clone(), v.clone(), self.layer_ind)
+            kv_cache.update(k.clone(), v.clone(), self.layer_idx)
 
         attn_out = flex_attention(q, k, v, block_mask=block_mask)
         attn_out = attn_out.permute(0, 2, 1, 3).contiguous().view(x.shape[0], L, -1)
 
         return self.out(attn_out)
 
+
 class DiTBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
 
         dim = config.d_model
 
-        self.attn = Attn(config)
+        self.attn = Attn(config, layer_idx)
         self.mlp = MLP(config)
 
         self.adaln1 = AdaLN(dim)
@@ -107,52 +103,52 @@ class DiTBlock(nn.Module):
         self.adaln2 = AdaLN(dim)
         self.gate2 = Gate(dim)
 
-    def forward(self, x, cond, block_mask, kv_cache = None):
-        res1 = x.clone()
+    def forward(self, x, cond, block_mask, kv_cache=None):
+        residual = x
         x = self.adaln1(x, cond)
         x = self.attn(x, block_mask, kv_cache)
         x = self.gate1(x, cond)
-        x = res1 + x
+        x = residual + x
 
-        res2 = x.clone()
+        residual = x
         x = self.adaln2(x, cond)
         x = self.mlp(x)
         x = self.gate2(x, cond)
-        x = res2 + x
+        x = residual + x
 
         return x
+
 
 class DiT(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
 
-        self.tokens_per_frame = config.tokens_per_frame
-        self.causal = config.causal
+        self.local_layers = [True for layer_idx in range(config.n_layers)]
+        self.blocks = nn.ModuleList([DiTBlock(config, idx) for idx in range(config.n_layers)])
 
-        blocks = []
-        for i in range(config.n_layers):
-            blocks.append(DiTBlock(config))
-            blocks[-1].attn.layer_ind = i
-        self.blocks = nn.ModuleList(blocks)
-
-    def get_block_mask(self, x, kv_cache):
-        if not self.causal:
+    def get_block_mask(self, x, kv_cache, window_len):
+        if not self.config.causal:
             return None
-        B, L, _ = x.shape
+        seq_len = x.size(1)
         offset = kv_cache.length_at(0) if kv_cache is not None else 0
         return create_causal_block_mask(
-            n_tokens=L + offset,
-            tokens_per_frame=self.tokens_per_frame,
+            n_tokens=seq_len + offset,
+            tokens_per_frame=self.config.tokens_per_frame,
             n_cached_tokens=offset,
+            window_len=window_len,
             device=x.device
         )
 
-    def forward(self, x, cond, kv_cache = None):
-        block_mask = self.get_block_mask(x, kv_cache)
-        for block in self.blocks:
-            x = block(x, cond, block_mask, kv_cache)
+    def forward(self, x, cond, kv_cache=None):
+        local_block_mask = self.get_block_mask(x, kv_cache, self.config.local_window)
+        global_block_mask = self.get_block_mask(x, kv_cache, self.config.global_window)
 
+        for layer_idx, block in enumerate(self.blocks):
+            block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask
+            x = block(x, cond, block_mask, kv_cache)
         return x
+
 
 class SkipConnection(nn.Module):
     def __init__(self, config):
