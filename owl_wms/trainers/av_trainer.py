@@ -163,8 +163,7 @@ class AVRFTTrainer(BaseTrainer):
                 with ctx:
                     loss, video_loss, audio_loss = self.model(batch_vid, batch_audio, batch_mouse, batch_btn)
                     loss = loss / accum_steps
-                    with torch._dynamo.compiled_autograd._enable(torch.compile, mode="aot_eager"):
-                        loss.backward()
+                    loss.backward()
 
                 metrics.log('diffusion_loss', loss)
                 metrics.log('video_loss', video_loss)
