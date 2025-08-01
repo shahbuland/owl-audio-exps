@@ -7,7 +7,7 @@ from .mlp import MLP
 import einops as eo
 
 from .modulation import cond_adaln, cond_gate
-from .rope import VideoRoPE, AVRoPE
+from .rope import VideoRoPE
 from .attn import create_causal_block_mask
 
 from torch.nn.attention.flex_attention import flex_attention
@@ -119,8 +119,7 @@ class MMDIT(nn.Module):
         self.config = config
 
         # layer attention pattern is [global, local, local, local, global, ...]
-        #self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
-        self.local_layers = [True for layer_idx in range(config.n_layers)]
+        self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
         self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32), persistent=False)
         self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32), persistent=False)
 
