@@ -118,27 +118,36 @@ class VideoRoPE(RoPE):
         return torch.cat([interleaved_spatial, angles_t], dim=-1)
 
     def _create_positions(self, n_frames, height, width, ats_delta):
-        # Create base grids
+        # Base 1D grids for time, height, and width
         t_grid = torch.arange(n_frames, dtype=torch.float32) * ats_delta
         h_grid = torch.arange(height, dtype=torch.float32) - (height - 1) / 2.0
         w_grid = torch.arange(width, dtype=torch.float32) - (width - 1) / 2.0
 
-        # Video positions: broadcast and flatten
+        # Create flattened position lists for video and audio
         t_video = eo.repeat(t_grid, 'f -> (f h w)', h=height, w=width)
         x_video = t_video + eo.repeat(w_grid, 'w -> (f h w)', f=n_frames, h=height)
         y_video = t_video + eo.repeat(h_grid, 'h -> (f h w)', f=n_frames, w=width)
 
-        # Audio positions: simple repetition
         t_audio = eo.repeat(t_grid, 'f -> f')
-        x_audio = t_audio  # audio_x_offset = 0
-        y_audio = t_audio + (height - 1) / 2.0 + 1.0  # audio_y_offset
+        x_audio = t_audio
+        y_audio = t_audio + (height - 1) / 2.0 + 1.0
 
-        # Concatenate video and audio
-        return (
-            torch.cat([x_video, x_audio]),
-            torch.cat([y_video, y_audio]),
-            torch.cat([t_video, t_audio])
-        )
+        # Stack x, y, t components to process them together
+        # Shape: (3, F*H*W) for video, (3, F) for audio
+        stacked_video = torch.stack([x_video, y_video, t_video])
+        stacked_audio = torch.stack([x_audio, y_audio, t_audio])
+
+        # Reshape video to (d f n) and audio to (d f 1)
+        stacked_video = eo.rearrange(stacked_video, 'd (f n) -> d f n', f=n_frames)
+        stacked_audio = eo.rearrange(stacked_audio, 'd f -> d f 1')
+
+        # Interleave by concatenating along the token dimension
+        interleaved = torch.cat([stacked_video, stacked_audio], dim=2)
+
+        # Flatten back into final (x, y, t) position lists
+        x_pos, y_pos, t_pos = eo.rearrange(interleaved, 'd f n -> d (f n)').unbind(0)
+
+        return x_pos, y_pos, t_pos
 
 
 def visaulize_rope_freqs():
