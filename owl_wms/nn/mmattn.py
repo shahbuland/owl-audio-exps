@@ -39,12 +39,6 @@ class MMAttn(nn.Module):
         self.out_projs = nn.ModuleList([nn.Linear(config.d_model, config.d_model)for _ in range(2)])
         self.rope = VideoRoPE(config)
 
-        # needed for compiled bwd
-        self.flex_kernel_options = {
-            "BLOCK_M": 64, "BLOCK_N": 64,  # forward
-            "BLOCK_M1": 32, "BLOCK_N1": 64, "BLOCK_M2": 64, "BLOCK_N2": 32
-        }  # TODO: make None for inference?
-
     def split_qkv(self, qkv, tok_per_frm):
         return eo.rearrange(qkv, 'b (f n) (three h d) -> three b h f n d', n=tok_per_frm, three=3, h=self.n_heads)
 
@@ -77,7 +71,7 @@ class MMAttn(nn.Module):
             kv_cache.update(k.clone(), v.clone(), self.layer_idx)
 
         # Attention & merge heads
-        attn_out = flex_attention(q, k, v, block_mask=block_mask, kernel_options=self.flex_kernel_options)
+        attn_out = flex_attention(q, k, v, block_mask=block_mask)
         attn_out = eo.rearrange(attn_out, 'b h n d -> b n (h d)')
 
         # Split into original modalities + out proj

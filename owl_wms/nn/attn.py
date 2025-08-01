@@ -46,7 +46,8 @@ def create_causal_block_mask(n_tokens: int, tokens_per_frame: int, window_len: i
         H=None,
         Q_LEN=n_tokens - n_cached_tokens,
         KV_LEN=n_tokens,
-        device=device
+        device=device,
+        BLOCK_SIZE=32
     )
 
 
