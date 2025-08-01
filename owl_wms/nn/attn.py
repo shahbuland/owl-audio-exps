@@ -124,7 +124,8 @@ class DiT(nn.Module):
         super().__init__()
         self.config = config
 
-        self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
+        #self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
+        self.local_layers = [True for layer_idx in range(config.n_layers)]
         self.blocks = nn.ModuleList([DiTBlock(config, idx) for idx in range(config.n_layers)])
 
     def get_block_mask(self, x, kv_cache, window_len):
