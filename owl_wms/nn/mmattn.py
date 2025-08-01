@@ -120,9 +120,6 @@ class MMDIT(nn.Module):
 
         # layer attention pattern is [global, local, local, local, global, ...]
         self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
-        self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32), persistent=False)
-        self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32), persistent=False)
-
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
         # DiT-Air
@@ -145,8 +142,8 @@ class MMDIT(nn.Module):
         )
 
     def forward(self, x0, x1, cond, kv_cache=None):
-        local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.local_window)
-        global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.global_window)
+        local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.config.local_window)
+        global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.config.global_window)
         cond0, cond1 = self.cond_proj(cond).chunk(2, dim=-1)
         for layer_idx, block in enumerate(self.blocks):
             block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask
