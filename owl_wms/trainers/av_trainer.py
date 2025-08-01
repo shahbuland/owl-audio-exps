@@ -20,10 +20,6 @@ from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
 
 
-torch._dynamo.config.capture_scalar_outputs = True
-torch._dynamo.config.optimize_ddp = "python_reducer"  # needed for compiled backwards
-
-
 class AVRFTTrainer(BaseTrainer):
     """
     Trainer for rectified flow transformer
