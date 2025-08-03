@@ -1,0 +1,144 @@
+import torch
+from torch import nn
+import torch.nn.functional as F
+
+
+from ..nn.embeddings import (
+    TimestepEmbedding,
+    ControlEmbedding,
+    LearnedPosEnc
+)
+from ..nn.normalization import layer_norm
+from ..nn.attn import DiT, FinalLayer, UViT
+from ..nn.mmattn import MMDIT
+
+class GameRFTCore(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        self.config = config
+
+        self.backbone = config.backbone
+        backbone_cls = {
+            "dit": DiT,
+            # "mmdit": MMDIT,  # Cannot handle only one modality
+            "uvit": UViT
+        }[self.backbone]
+
+        self.transformer = backbone_cls(config)
+
+        if not config.uncond:
+            self.control_embed = ControlEmbedding(config.n_buttons, config.d_model)
+        self.t_embed = TimestepEmbedding(config.d_model)
+
+        self.proj_in = nn.Linear(config.channels, config.d_model, bias = False)
+        self.proj_out = FinalLayer(config.sample_size, config.d_model, config.channels)
+
+        assert self.config.tokens_per_frame == self.config.sample_size**2
+
+        self.uncond = config.uncond
+
+    def forward(self, x, t, mouse, btn, has_controls = None, kv_cache = None):
+        # x is [b,n,c,h,w]
+        # t is [b,n]
+        # mouse is [b,n,2]
+        # btn is [b,n,n_buttons]
+
+        t_cond = self.t_embed(t)
+
+        if not self.uncond:
+            ctrl_cond = self.control_embed(mouse, btn)  # [b,n,d]
+            if has_controls is not None:
+                ctrl_cond = torch.where(has_controls[:,None,None], ctrl_cond, torch.zeros_like(ctrl_cond))
+            cond = t_cond + ctrl_cond  # [b,n,d]
+        else:
+            cond = t_cond
+
+        b,n,c,h,w = x.shape
+        x = x.permute(0,1,3,4,2) # bnhwc
+        x = x.reshape(b,n*h*w,c) # b(nhw)c
+
+        x = self.proj_in(x) # b(nhw)d
+
+        if self.backbone == 'dit' or self.backbone == 'uvit':
+            x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
+            x = x.reshape(b, n * x.shape[2], x.shape[-1]) # b(n(hw+1))d
+            x = self.transformer(x, cond, kv_cache)
+
+            # Split into video and audio tokens
+            video = x.view(b, n, -1, x.shape[-1])
+            video = video.reshape(b, n * video.shape[2], video.shape[-1]) # b(nhw)d
+
+        elif self.backbone == 'mmdit':
+            raise NotImplementedError
+            video, audio = self.transformer(x, audio, cond, kv_cache)
+
+        # Project video tokens
+        video = self.proj_out(layer_norm(video), layer_norm(cond))
+        video = video.reshape(b, n, h, w, c).permute(0, 1, 4, 2, 3) # bnchw
+        return video
+
+
+class GameRFT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.core = GameRFTCore(config)
+
+    def handle_cfg(self, has_controls = None, cfg_prob = None):
+        if cfg_prob is None:
+            cfg_prob = self.config.cfg_prob
+        if cfg_prob <= 0.0 or has_controls is None:
+            return has_controls
+
+        # Calculate current percentage without controls
+        pct_without = 1.0 - has_controls.float().mean()
+
+        # Only apply CFG if we need more negatives
+        if pct_without < cfg_prob:
+            # Calculate how many more we need
+            needed = cfg_prob - pct_without
+            needed_frac = needed / has_controls.float().mean()
+
+            # Only drop controls where has_controls is True
+            b = has_controls.shape[0]
+            mask = (torch.rand(b, device=has_controls.device) <= needed_frac) & has_controls
+
+            # Update has_controls based on mask
+            has_controls = has_controls & (~mask)
+
+        return has_controls
+
+    def noise(self, tensor, ts):
+        z = torch.randn_like(tensor)
+        lerp = tensor * (1 - ts) + z * ts
+        return lerp, z - tensor, z
+
+    def forward(self, x, mouse=None, btn=None, return_dict=False, cfg_prob=None, has_controls=None):
+        B, S = x.size(0), x.size(1)
+        if has_controls is None:
+            has_controls = torch.ones(B, device=x.device, dtype=torch.bool)
+        if mouse is None or btn is None:
+            has_controls = torch.zeros_like(has_controls)
+
+        # Apply classifier-free guidance dropout
+        has_controls = self.handle_cfg(has_controls, cfg_prob)
+        with torch.no_grad():
+            ts = torch.randn(B, S, device=x.device, dtype=x.dtype).sigmoid()
+            lerpd_video, target_video, z_video = self.noise(x, ts[:, :, None, None, None])
+
+        pred_video = self.core(lerpd_video, ts, mouse, btn, has_controls)
+        loss = F.mse_loss(pred_video, target_video)
+
+        if not return_dict:
+            return loss
+        else:
+            return {
+                'diffusion_loss': loss,
+                'video_loss': loss,
+                'lerpd_video': lerpd_video,
+                'pred_video': pred_video,
+                'ts': ts,
+                'z_video': z_video,
+                'cfg_mask': has_controls
+            }

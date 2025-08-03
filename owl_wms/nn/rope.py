@@ -1,9 +1,4 @@
-"""
-Variants of RoPE were becoming heavy for embeddings so
-I made a unique script for all of them here
-"""
-
-from rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
+from rotary_embedding_torch import RotaryEmbedding
 import torch
 from torch import nn
 from torch.cuda.amp import autocast
@@ -17,6 +12,12 @@ class RoPE(nn.Module):
     def __init__(self, config):
         super().__init__()
         freqs = self.get_freqs(config)
+
+        if not config.has_audio:
+            # subclasses freqs include audio by default, remove last item from each frame
+            freqs = freqs.view(config.n_frames, -1, freqs.size(-1))[:, :-1].flatten(0, 1)
+            freqs = freqs
+
         self.cos = nn.Buffer(freqs.cos().contiguous(), persistent=False)
         self.sin = nn.Buffer(freqs.sin().contiguous(), persistent=False)
 

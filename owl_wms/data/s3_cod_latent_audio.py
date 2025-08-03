@@ -65,7 +65,8 @@ class WindowedViewDataset(Dataset):
 
 def collate_fn(batch):
     stacked = {k: torch.stack([item[k] for item in batch]) for k in batch[0]}
-    return [stacked[k] for k in ("video", "audio", "mouse", "buttons")]
+    # return [stacked[k] for k in ("video", "audio", "mouse", "buttons")]
+    return [stacked[k] for k in ("video", "mouse", "buttons")]
 
 
 def get_loader(batch_size, dataset_path, window_length):
