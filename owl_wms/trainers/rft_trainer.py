@@ -221,15 +221,19 @@ class RFTTrainer(BaseTrainer):
         gc.collect()
         torch.cuda.empty_cache()
 
-        def gather_concat_cpu(t, dim=0, chunk_size=1 << 20):
-            def _gather_chunk(c):
-                buf = [torch.empty_like(c) for _ in range(self.world_size)]
-                dist.all_gather(buf, c.contiguous())
-                return torch.cat([b.cpu() for b in buf], dim=dim)
-            return torch.cat(
-                [_gather_chunk(c) for c in torch.split(t, chunk_size, dim=dim)],
-                dim=dim
-            )
+        def gather_concat_cpu(t, dim=0):
+            if self.rank == 0:
+                parts = [t.cpu()]
+                scratch = torch.empty_like(t)
+                for src in range(self.world_size):
+                    if src == 0:
+                        continue
+                    dist.recv(scratch, src=src)
+                    parts.append(scratch.cpu())
+                return torch.cat(parts, dim=dim)
+            else:
+                dist.send(t, dst=0)
+                return None
 
         # ---- Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
