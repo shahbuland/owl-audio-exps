@@ -1,6 +1,3 @@
-from . import local_cod_data
-from . import local_cod_latent
-
 def get_loader(data_id, batch_size, **data_kwargs):
     if data_id == "cod":
         from . import cod_latent
