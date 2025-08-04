@@ -91,7 +91,7 @@ class RFTTrainer(BaseTrainer):
 
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
-        self.model = torch.compile(self.model)
+        # self.model = torch.compile(self.model)
 
         self.decoder = self.decoder.cuda().eval().bfloat16()
         decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
