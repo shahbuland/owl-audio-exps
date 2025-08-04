@@ -3,7 +3,7 @@ import einops
 from torch import nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from .normalization import layer_norm
+from .normalization import rms_norm
 from .mlp import MLP
 
 
@@ -66,7 +66,7 @@ class Attn(nn.Module):
 
         qkv = self.qkv(x)
         q, k, v = einops.rearrange(qkv, "b t (three h d) -> three b h t d", three=3, h=self.n_heads)
-        q, k = layer_norm(q), layer_norm(k)
+        q, k = rms_norm(q), rms_norm(k)
 
         # rotate new queries and keys (shared kv cache between modalities)
         offset = kv_cache.length_at(self.layer_idx) if kv_cache is not None else 0

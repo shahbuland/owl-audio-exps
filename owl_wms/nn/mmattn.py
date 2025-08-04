@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from .normalization import layer_norm
+from .normalization import rms_norm
 from .mlp import MLP
 
 import einops as eo
@@ -53,7 +53,7 @@ class MMAttn(nn.Module):
         q, k, v = [torch.cat(groups, dim=3) for groups in zip(*qkvs)]
         q, k, v = [eo.rearrange(x, 'b h f n d -> b h (f n) d') for x in [q, k, v]]
 
-        q, k = layer_norm(q), layer_norm(k)
+        q, k = rms_norm(q), rms_norm(k)
 
         # rotate new queries and keys (shared kv cache between modalities)
         offset = kv_cache.length_at(self.layer_idx) if kv_cache is not None else 0

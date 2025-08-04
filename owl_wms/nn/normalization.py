@@ -3,12 +3,12 @@ from torch import nn
 import torch.nn.functional as F
 
 
-def layer_norm(x: torch.Tensor) -> torch.Tensor:
-    return rms_norm(x)  # return F.layer_norm(x, (x.size(-1),)).type_as(x)
-
-
 def rms_norm(x: torch.Tensor) -> torch.Tensor:
     return F.rms_norm(x, (x.size(-1),))
+
+
+def layer_norm(x: torch.Tensor) -> torch.Tensor:
+    return F.layer_norm(x, (x.size(-1),)).type_as(x)
 
 
 class RMSNorm(nn.Module):
@@ -40,4 +40,4 @@ class QKNorm(nn.Module):
         super().__init__()
 
     def forward(self, q, k):
-        return layer_norm(q), layer_norm(k)
+        return rms_norm(q), rms_norm(k)
