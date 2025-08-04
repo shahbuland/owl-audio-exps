@@ -52,7 +52,7 @@ class GameRFTCore(nn.Module):
 
         x = eo.rearrange(x, 'b n c h w -> b (n h w) c')
 
-        x = rms_norm(self.proj_in(x))
+        x = self.proj_in(x)
         x = self.transformer(x, cond, kv_cache)
         x = self.proj_out(x, cond)
 
