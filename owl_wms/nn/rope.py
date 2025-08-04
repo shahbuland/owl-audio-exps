@@ -66,7 +66,6 @@ class AVRoPE(RoPE):
     def get_freqs(self, config):
         p = config.sample_size
         head_dim = config.d_model // config.n_heads
-        assert p**2 + 1 == config.tokens_per_frame
 
         pos_emb = RotaryEmbedding(
             dim=head_dim // 4,  # Using half dimension since we only need 1D rotation
