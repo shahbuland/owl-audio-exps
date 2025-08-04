@@ -15,7 +15,7 @@ from ..schedulers import get_scheduler_cls
 from ..models import get_model_cls
 from ..sampling import get_sampler_cls
 from ..data import get_loader
-from ..utils.logging import LogHelper, to_wandb_av, to_wandb_av
+from ..utils.logging import LogHelper, to_wandb_av
 from ..utils import batch_permute_to_length
 from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn
@@ -32,8 +32,8 @@ class RFTTrainer(BaseTrainer):
     :param local_rank: Rank for current device on this process.
     :param world_size: Overall number of devices
     """
-    def __init__(self,*args,**kwargs):
-        super().__init__(*args,**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
         model_id = self.model_cfg.model_id
         self.model = get_model_cls(model_id)(self.model_cfg)
@@ -58,9 +58,9 @@ class RFTTrainer(BaseTrainer):
 
     def save(self):
         save_dict = {
-            'model' : self.model.state_dict(),
-            'ema' : self.ema.state_dict(),
-            'opt' : self.opt.state_dict(),
+            'model': self.model.state_dict(),
+            'ema': self.ema.state_dict(),
+            'opt': self.opt.state_dict(),
             'steps': self.total_step_counter
         }
         if self.scheduler is not None:
@@ -97,15 +97,15 @@ class RFTTrainer(BaseTrainer):
 
         self.ema = EMA(
             self.model,
-            beta = 0.999,
-            update_after_step = 0,
-            update_every = 1
+            beta=0.999,
+            update_after_step=0,
+            update_every=1
         )
         #torch.compile(self.ema.ema_model.module.core if self.world_size > 1 else self.ema.ema_model.core, dynamic=False, fullgraph=True)
 
         # Set up optimizer and scheduler
         if self.train_cfg.opt.lower() == "muon":
-            self.opt = init_muon(self.model, rank=self.rank,world_size=self.world_size,**self.train_cfg.opt_kwargs)
+            self.opt = init_muon(self.model, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
         else:
             self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
 
@@ -182,7 +182,8 @@ class RFTTrainer(BaseTrainer):
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx:
                                 eval_wandb_dict = self.eval_step(sample_loader, sampler, decode_fn)
-                                gc.collect(); torch.cuda.empty_cache()
+                                gc.collect()
+                                torch.cuda.empty_cache()
                                 if self.rank == 0:
                                     wandb_dict.update(eval_wandb_dict)
 

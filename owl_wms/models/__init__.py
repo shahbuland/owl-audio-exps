@@ -1,7 +1,7 @@
 def get_model_cls(model_id):
     if model_id == "game_rft":
         """
-        GameRFT is Rectified Flow Transformer for video + audio
+        GameRFT is Rectified Flow Transformer for video only
         """
         from .gamerft import GameRFT
         return GameRFT
