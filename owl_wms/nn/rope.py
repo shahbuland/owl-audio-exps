@@ -35,33 +35,9 @@ class RoPE(nn.Module):
         raise NotImplementedError
 
 
-class FlatVideoRoPE(RoPE):
-    """
-    RoPE on video + audio assuming each frame flat'd to [n_frame_toks+n_audio_toks]
-    Rotate non-pad portion of feature-dims of q/k. Video 1/4th padded, audio 1/2 padded
-    """
-    def get_freqs(self, config):
-        d_head = config.d_model // config.n_heads
-        p = config.sample_size  # video is PxP pixels
-
-        # Video freqs. Rot features: (L, P, P, <pad>)
-        vid_freqs = RotaryEmbedding(d_head // 4, freqs_for="pixel", max_freq=256)\
-            .get_axial_freqs(config.n_frames, p, p, 1, offsets=(0, 0, 0, 1))\
-            .view(config.n_frames, p**2, -1)
-
-        # Audio freqs. Rot features: (L, <pad>)
-        aud_freqs = RotaryEmbedding(d_head // 2)\
-            .get_axial_freqs(config.n_frames, 1, offsets=(0, 1))\
-            .view(config.n_frames, 1, -1)
-
-        # unified video / audio freqs. Shape: [n_frames, P^2 + 1, H]
-        freqs = torch.cat([vid_freqs, aud_freqs], dim=1).flatten(0, 1)
-        return freqs[..., ::2]  # subsampling
-
-
 class AVRoPE(RoPE):
     """
-    RoPE variant that treats audio as R+1,C+1 part of a frame
+    RoPE for rotation across orthogonal axes: time, height, and width
     """
     def get_freqs(self, config):
         p = config.sample_size
@@ -85,7 +61,11 @@ class AVRoPE(RoPE):
 
 
 class VideoRoPE(RoPE):
-    """https://arxiv.org/pdf/2502.05173"""
+    """
+    https://arxiv.org/pdf/2502.05173
+    RoPE implementing a diagonal layout where spatial coordinates are a linear function of time.
+    This constant-velocity prior serves as a baseline for learning complex, non-linear motion.
+    """
     def get_freqs(self, config):
         H, W = config.sample_size, config.sample_size
         F = config.n_frames
@@ -97,7 +77,10 @@ class VideoRoPE(RoPE):
             'y': getattr(config, 'rope_dim_y', d_head * 3 // 8)
         }
         theta = getattr(config, 'rope_base', 10000.0)
-        ats_delta = getattr(config, 'rope_ats_delta', 2.0)
+
+        # TODO: paper is 3 FPS, uses delta=2.0, we have 60 FPS, so we might want to lower this
+        # Rough heuristic for optimal parameter: delta = 1.0 -> objects tend to move one pixel per frame
+        ats_delta = getattr(config, 'rope_ats_delta', 0.5)
 
         base_freqs = RotaryEmbedding(dim=sum(dims.values()), freqs_for='lang', theta=theta).freqs.float()
 

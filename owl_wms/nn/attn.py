@@ -8,7 +8,7 @@ from .mlp import MLP
 
 
 from .modulation import AdaLN, Gate
-from .rope import VideoRoPE, AVRoPE
+from .rope import AVRoPE
 
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 
@@ -59,7 +59,7 @@ class Attn(nn.Module):
 
         self.qkv = nn.Linear(config.d_model, 3 * config.d_model)
         self.out = nn.Linear(config.d_model, config.d_model)
-        self.rope = AVRoPE(config)  # VideoRoPE(config)
+        self.rope = AVRoPE(config)
 
     def forward(self, x, block_mask, kv_cache=None):
         B, L, _ = x.shape
