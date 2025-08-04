@@ -53,7 +53,7 @@ train:
     adamw_wd: 1.0e-4
     adamw_eps: 1.0e-15
     adamw_betas: [0.9, 0.95]
-    adamw_keys: [core.proj_in, core.proj_out.proj, gate, adaln]
+    adamw_keys: [core.proj_in, core.proj_out.proj, core.t_embed, core.control_embed, gate, adaln]
 
   scheduler: null
 

@@ -59,7 +59,6 @@ class GameRFTCore(nn.Module):
         x = x.reshape(b,n*h*w,c) # b(nhw)c
 
         x = self.proj_in(x) # b(nhw)d
-        x = rms_norm(x)
 
         if self.backbone == 'dit' or self.backbone == 'uvit':
             x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
