@@ -2,14 +2,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from ..nn.embeddings import (
-    TimestepEmbedding,
-    ControlEmbedding,
-    LearnedPosEnc
-)
+from ..nn.embeddings import TimestepEmbedding, ControlEmbedding
 from ..nn.normalization import rms_norm
-from ..nn.attn import DiT, FinalLayer, UViT
-from ..nn.mmattn import MMDIT
+from ..nn.attn import DiT, FinalLayer
+
+import einops as eo
+from einops._torch_specific import allow_ops_in_compiled_graph
+allow_ops_in_compiled_graph()
 
 
 class GameRFTCore(nn.Module):
@@ -18,65 +17,47 @@ class GameRFTCore(nn.Module):
 
         self.config = config
 
-        self.backbone = config.backbone
-        backbone_cls = {
-            "dit": DiT,
-            # "mmdit": MMDIT,  # Cannot handle only one modality
-            "uvit": UViT
-        }[self.backbone]
-
-        self.transformer = backbone_cls(config)
+        assert config.backbone == "dit"
+        self.transformer = DiT(config)
 
         if not config.uncond:
             self.control_embed = ControlEmbedding(config.n_buttons, config.d_model)
         self.t_embed = TimestepEmbedding(config.d_model)
 
-        self.proj_in = nn.Linear(config.channels, config.d_model, bias = False)
+        self.proj_in = nn.Linear(config.channels, config.d_model, bias=False)
         self.proj_out = FinalLayer(config.sample_size, config.d_model, config.channels)
 
         assert self.config.tokens_per_frame == self.config.sample_size**2
 
         self.uncond = config.uncond
 
-    def forward(self, x, t, mouse, btn, has_controls = None, kv_cache = None):
-        # x is [b,n,c,h,w]
-        # t is [b,n]
-        # mouse is [b,n,2]
-        # btn is [b,n,n_buttons]
+    def forward(self, x, t, mouse, btn, has_controls=None, kv_cache=None):
+        """
+        x: [b,n,c,h,w]
+        t: [b,n]
+        mouse: [b,n,2]
+        btn: [b,n,n_buttons]
+        """
+        b, n, c, h, w = x.shape
 
         t_cond = self.t_embed(t)
 
         if not self.uncond:
             ctrl_cond = self.control_embed(mouse, btn)  # [b,n,d]
             if has_controls is not None:
-                ctrl_cond = torch.where(has_controls[:,None,None], ctrl_cond, torch.zeros_like(ctrl_cond))
+                ctrl_cond = torch.where(has_controls[:, None, None], ctrl_cond, torch.zeros_like(ctrl_cond))
             cond = t_cond + ctrl_cond  # [b,n,d]
         else:
             cond = t_cond
 
-        b,n,c,h,w = x.shape
-        x = x.permute(0,1,3,4,2) # bnhwc
-        x = x.reshape(b,n*h*w,c) # b(nhw)c
+        x = eo.rearrange(x, 'b n c h w -> b (n h w) c')
 
-        x = self.proj_in(x) # b(nhw)d
+        x = rms_norm(self.proj_in(x))
+        x = self.transformer(x, cond, kv_cache)
+        x = self.proj_out(x, cond)
 
-        if self.backbone == 'dit' or self.backbone == 'uvit':
-            x = x.reshape(b, n, -1, x.shape[-1]) # bn(hw)d
-            x = x.reshape(b, n * x.shape[2], x.shape[-1]) # b(n(hw+1))d
-            x = self.transformer(x, cond, kv_cache)
-
-            # Split into video and audio tokens
-            video = x.view(b, n, -1, x.shape[-1])
-            video = video.reshape(b, n * video.shape[2], video.shape[-1]) # b(nhw)d
-
-        elif self.backbone == 'mmdit':
-            raise NotImplementedError
-            video, audio = self.transformer(x, audio, cond, kv_cache)
-
-        # Project video tokens
-        video = self.proj_out(rms_norm(video), rms_norm(cond))
-        video = video.reshape(b, n, h, w, c).permute(0, 1, 4, 2, 3) # bnchw
-        return video
+        x = eo.rearrange(x, 'b (n h w) c -> b n c h w', h=h, w=w)
+        return x
 
 
 class GameRFT(nn.Module):
@@ -85,7 +66,7 @@ class GameRFT(nn.Module):
         self.config = config
         self.core = GameRFTCore(config)
 
-    def handle_cfg(self, has_controls = None, cfg_prob = None):
+    def handle_cfg(self, has_controls=None, cfg_prob=None):
         if cfg_prob is None:
             cfg_prob = self.config.cfg_prob
         if cfg_prob <= 0.0 or has_controls is None:
