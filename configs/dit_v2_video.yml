@@ -24,12 +24,12 @@ model:
 
 train:
   trainer_id: rft
-  data_id: cod_s3_audio
+  data_id: cod
   data_kwargs:
     window_length: 1000
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train
 
-  sample_data_id: cod_s3_audio
+  sample_data_id: cod
   sample_data_kwargs:
     window_length: 16  # size of single ground truth start tokens
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train

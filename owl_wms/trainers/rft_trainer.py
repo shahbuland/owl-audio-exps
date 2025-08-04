@@ -128,10 +128,20 @@ class RFTTrainer(BaseTrainer):
             wandb.watch(self.get_module(), log='all')
 
         # Dataset setup
-        loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
+        loader = get_loader(
+            self.train_cfg.data_id,
+            self.train_cfg.batch_size,
+            include_audio=False,
+            **self.train_cfg.data_kwargs
+        )
 
         n_samples = (self.train_cfg.n_samples + self.world_size - 1) // self.world_size  # round up to next world_size
-        sample_loader = get_loader(self.train_cfg.sample_data_id, n_samples, **self.train_cfg.sample_data_kwargs)
+        sample_loader = get_loader(
+            self.train_cfg.sample_data_id,
+            n_samples,
+            include_audio=False,
+            **self.train_cfg.sample_data_kwargs
+        )
         sample_loader = iter(sample_loader)
 
         if self.train_cfg.data_id == "cod_s3_mixed":
