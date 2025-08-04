@@ -17,7 +17,8 @@ model:
 
   causal: true
   uncond: false
-  backbone: mmdit
+  backbone: dit
+  has_audio: true  # false
 
   local_window: 16
   global_window: 256
@@ -57,8 +58,8 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/av_mmdit_v1
-  output_path: /mnt/data/owl-wms/checkpoints/av_mmdit_v1
+  checkpoint_dir: checkpoints/av_dit_v2
+  output_path: /mnt/data/owl-wms/checkpoints/av_dit_v2
   resume_ckpt: null
 
   sample_interval: 5000
@@ -91,4 +92,4 @@ train:
 wandb:
   name: louiscastricato  # lapp0-andrew-lapp
   project: video_models  # owl
-  run_name: av_mmdit_audio_fix
+  run_name: av_dit_v2

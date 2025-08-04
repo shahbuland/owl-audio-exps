@@ -11,6 +11,12 @@ def get_trainer_cls(trainer_id):
         """
         from .av_trainer import AVRFTTrainer
         return AVRFTTrainer
+    if trainer_id == "rft":
+        """
+        Most basic trainer. Does audio + video training.
+        """
+        from .rft_trainer import RFTTrainer
+        return RFTTrainer
     if trainer_id == "mixed_av":
         """
         Allows for datasets that are a mix of unlabelled (wrt controls) and labelled

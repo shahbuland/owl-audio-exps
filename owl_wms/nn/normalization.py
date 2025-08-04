@@ -40,4 +40,4 @@ class QKNorm(nn.Module):
         super().__init__()
 
     def forward(self, q, k):
-        return layer_norm(q), layer_norm(k)
+        return rms_norm(q), rms_norm(k)

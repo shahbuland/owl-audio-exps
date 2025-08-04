@@ -1,5 +1,6 @@
 from .npy_table import NpyTable
 
+from functools import partial
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler, Dataset
@@ -63,12 +64,15 @@ class WindowedViewDataset(Dataset):
         }
 
 
-def collate_fn(batch):
+def collate_fn(batch, include_audio):
     stacked = {k: torch.stack([item[k] for item in batch]) for k in batch[0]}
-    return [stacked[k] for k in ("video", "audio", "mouse", "buttons")]
+    if include_audio:
+        return [stacked[k] for k in ("video", "audio", "mouse", "buttons")]
+    else:
+        return [stacked[k] for k in ("video", "mouse", "buttons")]
 
 
-def get_loader(batch_size, dataset_path, window_length):
+def get_loader(batch_size, dataset_path, window_length, include_audio=True):
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -83,7 +87,7 @@ def get_loader(batch_size, dataset_path, window_length):
     return DataLoader(
         ds,
         batch_size=batch_size,
-        collate_fn=collate_fn,
+        collate_fn=partial(collate_fn, include_audio=include_audio),
         num_workers=2,
         drop_last=True,
         pin_memory=True,

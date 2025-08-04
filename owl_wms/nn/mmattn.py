@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from .normalization import layer_norm
+from .normalization import rms_norm
 from .mlp import MLP
 
 import einops as eo
@@ -16,7 +16,7 @@ from einops._torch_specific import allow_ops_in_compiled_graph
 allow_ops_in_compiled_graph()
 
 
-flex_attention = torch.compile(flex_attention, dynamic=True)
+flex_attention = torch.compile(flex_attention)
 
 """
 This code makes the assumption that there are some
@@ -53,7 +53,7 @@ class MMAttn(nn.Module):
         q, k, v = [torch.cat(groups, dim=3) for groups in zip(*qkvs)]
         q, k, v = [eo.rearrange(x, 'b h f n d -> b h (f n) d') for x in [q, k, v]]
 
-        q, k = layer_norm(q), layer_norm(k)
+        q, k = rms_norm(q), rms_norm(k)
 
         # rotate new queries and keys (shared kv cache between modalities)
         offset = kv_cache.length_at(self.layer_idx) if kv_cache is not None else 0
@@ -119,10 +119,7 @@ class MMDIT(nn.Module):
         self.config = config
 
         # layer attention pattern is [global, local, local, local, global, ...]
-        self.local_layers = [~(layer_idx % 4 == 0) for layer_idx in range(config.n_layers)]
-        self.local_window = nn.Buffer(torch.tensor(self.config.local_window, dtype=torch.int32), persistent=False)
-        self.global_window = nn.Buffer(torch.tensor(self.config.global_window, dtype=torch.int32), persistent=False)
-
+        self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
         self.blocks = nn.ModuleList([MMDiTBlock(config, idx) for idx in range(config.n_layers)])
 
         # DiT-Air
@@ -145,8 +142,8 @@ class MMDIT(nn.Module):
         )
 
     def forward(self, x0, x1, cond, kv_cache=None):
-        local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.local_window)
-        global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.global_window)
+        local_block_mask = self.get_block_mask(x0, x1, kv_cache, self.config.local_window)
+        global_block_mask = self.get_block_mask(x0, x1, kv_cache, self.config.global_window)
         cond0, cond1 = self.cond_proj(cond).chunk(2, dim=-1)
         for layer_idx, block in enumerate(self.blocks):
             block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask

@@ -1,14 +1,13 @@
 model:
-  model_id: game_rft_audio
+  model_id: game_rft
   sample_size: 8
   channels: 128
-  audio_channels: 64
 
   n_layers: 16
   n_heads: 24
   d_model: 1536
 
-  tokens_per_frame: 65
+  tokens_per_frame: 64
   n_buttons: 11
   n_mouse_axes: 2
 
@@ -17,13 +16,14 @@ model:
 
   causal: true
   uncond: false
-  backbone: mmdit
+  backbone: dit
+  has_audio: false
 
   local_window: 16
   global_window: 256
 
 train:
-  trainer_id: av
+  trainer_id: rft
   data_id: cod
   data_kwargs:
     window_length: 1000
@@ -53,12 +53,12 @@ train:
     adamw_wd: 1.0e-4
     adamw_eps: 1.0e-15
     adamw_betas: [0.9, 0.95]
-    adamw_keys: [core.proj_in, core.proj_out.proj]
+    adamw_keys: [core.proj_in, core.proj_out.proj, core.t_embed, core.control_embed, gate, adaln]
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/av_mmdit_v1
-  output_path: /mnt/data/owl-wms/checkpoints/av_mmdit_v1
+  checkpoint_dir: checkpoints/video_dit_v2
+  output_path: /mnt/data/owl-wms/checkpoints/video_dit_v2
   resume_ckpt: null
 
   sample_interval: 5000
@@ -79,16 +79,11 @@ train:
   vae_id: null
   vae_batch_size: 4
   vae_scale: 0.63
-  audio_vae_scale: 0.45
 
   vae_cfg_path: configs/owl_vaes/cod_128x_feats.yml
   vae_ckpt_path: /mnt/data/checkpoints/owl_vaes/cod_128x_feats/cod_128x_feats_160k_ema.pt
 
-  audio_vae_id: null
-  audio_vae_cfg_path: configs/owl_vaes/audio_ae_2.yml
-  audio_vae_ckpt_path: /mnt/data/checkpoints/cache_for_wm/sf_v0/cod_audio.pt
-
 wandb:
   name: louiscastricato  # lapp0-andrew-lapp
   project: video_models  # owl
-  run_name: av_mmdit_audio_fix
+  run_name: video_dit_v2
