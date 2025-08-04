@@ -120,8 +120,6 @@ class CombinedOptimizer(Optimizer):
         self.defaults = {}
 
         adamw_keys = kwargs.pop('adamw_keys', [])
-        if world_size > 1:
-            adamw_keys = ['module.' + key for key in adamw_keys]
 
         normalized_named_params = {n.replace("._orig_mod", ""): p for n, p in model.named_parameters()}
 
