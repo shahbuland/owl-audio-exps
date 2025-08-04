@@ -88,6 +88,11 @@ class RFTTrainer(BaseTrainer):
 
         # Prepare model and ema
         self.model = self.model.cuda().train()
+
+        ###
+        assert torch.all(self.model.core.transformer.blocks[0].mlp.fc2.weight == 0)
+        ###
+
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
         self.model = torch.compile(self.model)
