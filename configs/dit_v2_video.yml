@@ -18,6 +18,7 @@ model:
   uncond: false
   backbone: dit
   has_audio: false
+  rope_impl: motion
 
   local_window: 16
   global_window: 256
