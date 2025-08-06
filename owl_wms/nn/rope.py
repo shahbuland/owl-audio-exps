@@ -7,6 +7,16 @@ import einops as eo
 from einops._torch_specific import allow_ops_in_compiled_graph  # requires einops>=0.6.1
 allow_ops_in_compiled_graph()
 
+def get_rope_cls(cls_name):
+    cls_name = cls_name.lower()
+    if cls_name == "rope":
+        return RoPE
+    elif cls_name == "ortho":
+        return OrthoRoPE
+    elif cls_name == "motion":
+        return MotionRoPE
+    else:
+        raise ValueError(f"Invalid RoPE class: {cls_name}")
 
 class RoPE(nn.Module):
     def __init__(self, config):
@@ -35,7 +45,7 @@ class RoPE(nn.Module):
         raise NotImplementedError
 
 
-class AVRoPE(RoPE):
+class OrthoRoPE(RoPE):
     """
     RoPE for rotation across orthogonal axes: time, height, and width
     """
@@ -60,7 +70,7 @@ class AVRoPE(RoPE):
         return freqs[..., ::2]  # subsampling
 
 
-class VideoRoPE(RoPE):
+class MotionRoPE(RoPE):
     """
     https://arxiv.org/pdf/2502.05173
     RoPE implementing a diagonal layout where spatial coordinates are a linear function of time.
