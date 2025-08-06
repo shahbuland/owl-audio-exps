@@ -7,6 +7,7 @@ import einops as eo
 from einops._torch_specific import allow_ops_in_compiled_graph  # requires einops>=0.6.1
 allow_ops_in_compiled_graph()
 
+
 def get_rope_cls(cls_name):
     cls_name = cls_name.lower()
     if cls_name == "ortho":
@@ -15,6 +16,7 @@ def get_rope_cls(cls_name):
         return MotionRoPE
     else:
         raise ValueError(f"Invalid RoPE class: {cls_name}")
+
 
 class RoPE(nn.Module):
     def __init__(self, config):
