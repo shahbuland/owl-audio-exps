@@ -9,9 +9,7 @@ allow_ops_in_compiled_graph()
 
 def get_rope_cls(cls_name):
     cls_name = cls_name.lower()
-    if cls_name == "rope":
-        return RoPE
-    elif cls_name == "ortho":
+    if cls_name == "ortho":
         return OrthoRoPE
     elif cls_name == "motion":
         return MotionRoPE
