@@ -5,14 +5,14 @@ model:
 
   n_layers: 16
   n_heads: 24
-  d_model: 1000  # 1536
+  d_model: 1536
 
   tokens_per_frame: 64
   n_buttons: 11
   n_mouse_axes: 2
 
   cfg_prob: 0.1
-  n_frames: 1536
+  n_frames: 1000  # 1536
 
   causal: true
   uncond: false
