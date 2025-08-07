@@ -62,8 +62,8 @@ train:
   scheduler: null
 
   checkpoint_dir: checkpoints/video_dit_v2
-  output_path: /mnt/data/owl-wms/checkpoints/video_dit_v2
-  resume_ckpt: /mnt/data/lapp0/checkpoints/203a804/checkpoints/step_90000.pt
+  output_path: /mnt/data/owl-wms/checkpoints/dit_v3
+  resume_ckpt: null
 
   sample_interval: 5000
   save_interval: 10000
