@@ -5,7 +5,7 @@ model:
 
   n_layers: 16
   n_heads: 24
-  d_model: 1536
+  d_model: 1000  # 1536
 
   tokens_per_frame: 64
   n_buttons: 11
@@ -22,13 +22,13 @@ model:
   rope_ats_delta: 2.0
 
   local_window: 16
-  global_window: null  # full window
+  global_window: 256  # null  # full window
 
 train:
   trainer_id: rft
   data_id: sequence_packing
   data_kwargs:
-    window_length: 1536
+    window_length: 1000  # 1536
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train
     batch_columns: ["video", "mouse", "buttons"]
 
