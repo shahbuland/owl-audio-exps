@@ -3,7 +3,6 @@ from torch import nn
 import torch.nn.functional as F
 
 from ..nn.embeddings import TimestepEmbedding, ControlEmbedding
-from ..nn.normalization import rms_norm
 from ..nn.attn import DiT, FinalLayer
 
 import einops as eo
@@ -108,7 +107,14 @@ class GameRFT(nn.Module):
             ts = torch.randn(B, S, device=x.device, dtype=x.dtype).sigmoid()
             lerpd_video, target_video, z_video = self.noise(x, ts[:, :, None, None, None])
 
-        pred_video = self.core(lerpd_video, ts, mouse, btn, doc_id, has_controls)
+        pred_video = self.core(
+            x=lerpd_video,
+            t=ts,
+            mouse=mouse,
+            btn=btn,
+            doc_id=doc_id,
+            has_controls=has_controls
+        )
         loss = F.mse_loss(pred_video, target_video)
 
         if not return_dict:
