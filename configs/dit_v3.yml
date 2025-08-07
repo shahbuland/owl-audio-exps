@@ -12,7 +12,7 @@ model:
   n_mouse_axes: 2
 
   cfg_prob: 0.1
-  n_frames: 1000
+  n_frames: 2048
 
   causal: true
   uncond: false
@@ -22,13 +22,13 @@ model:
   rope_ats_delta: 2.0
 
   local_window: 16
-  global_window: 256
+  global_window: null  # full window
 
 train:
   trainer_id: rft
   data_id: sequence_packing
   data_kwargs:
-    window_length: 1000
+    window_length: 2048
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train
     batch_columns: ["video", "mouse", "buttons"]
 
@@ -38,8 +38,8 @@ train:
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train
     batch_columns: ["video", "mouse", "buttons"]
 
-  target_batch_size: 8  # 512
-  batch_size: 1  # 64 is possible
+  target_batch_size: 8
+  batch_size: 1
 
   epochs: 10000
 
