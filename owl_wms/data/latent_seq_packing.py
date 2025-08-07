@@ -120,11 +120,14 @@ class WindowedViewDataset(Dataset):
         cuts = np.flatnonzero(np.diff(win_id)) + 1
         blocks = np.split(np.column_stack([doc, s_idx, e_idx]), cuts)
 
-        # remove last sequence if its truncated
-        if blocks and (blocks[-1][:, 2] - blocks[-1][:, 1]).sum() < self.window_length:
-            blocks = blocks[:-1]
+        # `win_id` is already non-decreasing → just split where it changes
+        cuts = np.flatnonzero(np.diff(win_id)) + 1
+        blocks = np.split(np.column_stack([doc, s_idx, e_idx]), cuts)
 
-        return [list(map(tuple, blk)) for blk in blocks]
+        slices = [list(map(tuple, blk)) for blk in blocks]
+
+        # remove last sequence if its truncated
+        return [s for s in slices if sum(hi - lo for _, lo, hi in s) == self.window_length]
 
 
 def collate_fn(batch, batch_columns: list):
