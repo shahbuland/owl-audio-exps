@@ -90,7 +90,7 @@ class MotionRoPE(RoPE):
 
         # TODO: paper is 3 FPS, uses delta=2.0, we have 60 FPS, so we might want to lower this
         # Rough heuristic for optimal parameter: delta = 1.0 -> objects tend to move one pixel per frame
-        ats_delta = getattr(config, 'rope_ats_delta', 0.5)
+        ats_delta = getattr(config, 'rope_ats_delta', 2.0)
 
         base_freqs = RotaryEmbedding(dim=sum(dims.values()), freqs_for='lang', theta=theta).freqs.float()
 
