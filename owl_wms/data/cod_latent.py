@@ -71,8 +71,9 @@ class WindowedViewDataset(Dataset):
 
 def collate_fn(batch, batch_columns: list):
     stacked = {k: torch.stack([item[k] for item in batch]) for k in batch[0]}
+    # TODO: fix hack, buttons should be preprocessed as float
     stacked = {
-        k: t.bfloat16() if t.dtype == torch.float32 else t
+        k: t.bfloat16() if (t.dtype == torch.float32 or k == "buttons") else t
         for k, t in stacked.items()
     }
     return [stacked[col] for col in batch_columns]
