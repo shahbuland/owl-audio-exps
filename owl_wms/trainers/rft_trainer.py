@@ -15,10 +15,13 @@ from ..schedulers import get_scheduler_cls
 from ..models import get_model_cls
 from ..sampling import get_sampler_cls
 from ..data import get_loader
-from ..utils.logging import LogHelper, to_wandb_av
+from ..utils.logging import LogHelper, to_wandb_samples
 from ..utils import batch_permute_to_length
 from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn
+
+
+# core.transformer
 
 
 class RFTTrainer(BaseTrainer):
@@ -81,6 +84,20 @@ class RFTTrainer(BaseTrainer):
         if self.scheduler is not None and 'scheduler' in save_dict:
             self.scheduler.load_state_dict(save_dict['scheduler'])
         self.total_step_counter = save_dict['steps']
+
+    @torch.no_grad()
+    def update_buffer(self, name: str, value: torch.Tensor, value_ema: torch.Tensor | None = None):
+        """Set the buffer `name` (e.g. 'core.transformer.foo') across ranks and EMA."""
+        online = self.model.module if isinstance(self.model, DDP) else self.model
+        buf_online = online.get_buffer(name)
+        buf_ema = self.ema.ema_model.get_buffer(name)
+
+        if self.rank == 0:
+            buf_online.copy_(value.to(buf_online))
+        if self.world_size > 1:
+            dist.broadcast(buf_online, 0)
+
+        buf_ema.copy_(buf_online)
 
     def train(self):
         torch.cuda.set_device(self.local_rank)
@@ -203,71 +220,45 @@ class RFTTrainer(BaseTrainer):
 
                     self.barrier()
 
+    def _gather_concat_cpu(self, t: torch.Tensor, dim: int = 0):
+        """Gather *t* from every rank onto rank 0 and return concatenated copy."""
+        if self.world_size == 1:
+            return t.cpu()
+        if self.rank == 0:
+            parts = [t.cpu()]
+            scratch = torch.empty_like(t)
+            for src in range(1, self.world_size):
+                dist.recv(scratch, src=src)
+                parts.append(scratch.cpu())
+            return torch.cat(parts, dim=dim)
+        dist.send(t, dst=0)
+
     def eval_step(self, sample_loader, sampler, decode_fn=None):
         ema_model = self.get_module(ema=True).core
-        ema_model.eval()
 
-        # ---- Generation Run ----
-        vid_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-
-        mouse, button = mouse_for_sample.bfloat16().cuda(), btn_for_sample.bfloat16().cuda()
-        mouse, button = batch_permute_to_length(mouse, button, sampler.num_frames + vid_for_sample.size(1))
-        vid = vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale
+        # ---- Generate Samples ----
+        vid, mouse, btn = [x.cuda() for x in next(sample_loader)]
+        mouse, button = batch_permute_to_length(mouse, btn, sampler.num_frames + vid.size(1))
+        vid = vid / self.train_cfg.vae_scale
 
         latent_vid = sampler(ema_model, vid, mouse, button)
 
         if self.sampler_only_return_generated:
-            latent_vid = latent_vid[:, vid_for_sample.size(1):]
-            mouse = mouse[:, vid_for_sample.size(1):]
-            button = button[:, vid_for_sample.size(1):]
+            latent_vid, mouse, button = (x[:, vid.size(1):] for x in (latent_vid, mouse, button))
 
-        video_out = decode_fn(latent_vid * self.train_cfg.vae_scale,) if decode_fn is not None else None
+        video_out = decode_fn(latent_vid * self.train_cfg.vae_scale) if decode_fn is not None else None
 
-        del vid_for_sample, mouse_for_sample, btn_for_sample
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        def gather_concat_cpu(t, dim=0):
-            if self.rank == 0:
-                parts = [t.cpu()]
-                scratch = torch.empty_like(t)
-                for src in range(self.world_size):
-                    if src == 0:
-                        continue
-                    dist.recv(scratch, src=src)
-                    parts.append(scratch.cpu())
-                return torch.cat(parts, dim=dim)
-            else:
-                dist.send(t, dst=0)
-                return None
-
-        # ---- Save Latent Artifacts ----
+        # ---- Optionally Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
-            latent_vid = gather_concat_cpu(latent_vid)
+            latent_vid = self._gather_concat_cpu(latent_vid)
             if self.rank == 0:
                 eval_dir = Path(self.train_cfg.eval_sample_dir)
                 eval_dir.mkdir(parents=True, exist_ok=True)
                 torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
 
         # ---- Generate Media Artifacts ----
-        video_out, mouse, button = [
-            gather_concat_cpu(x, dim=0) for x in [video_out, mouse, button]
-        ]
-
-        if self.rank == 0:
-            wandb_av_out = to_wandb_av(video_out, None, mouse, button)
-            if len(wandb_av_out) == 3:
-                video, depth_gif, flow_gif = wandb_av_out
-                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif, flow_gif=flow_gif)
-            elif len(wandb_av_out) == 2:
-                video, depth_gif = wandb_av_out
-                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif)
-            else:
-                eval_wandb_dict = dict(samples=wandb_av_out)
-        else:
-            eval_wandb_dict = None
+        video_out, mouse, button = map(self._gather_concat_cpu, (video_out, mouse, button))
+        eval_wandb_dict = to_wandb_samples(video_out, mouse, button) if self.rank == 0 else None
         dist.barrier()
-
-        ema_model.train()  # unnecessary? ema model isn't trained?
 
         return eval_wandb_dict
