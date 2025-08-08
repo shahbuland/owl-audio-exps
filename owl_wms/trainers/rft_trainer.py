@@ -39,11 +39,12 @@ class RFTTrainer(BaseTrainer):
         super().__init__(*args, **kwargs)
 
         model_id = self.model_cfg.model_id
-        self.model = get_model_cls(model_id)(self.model_cfg)
+        self.raw_model = get_model_cls(model_id)(self.model_cfg).train()
+        self.model = None
 
         # Print model size
         if self.rank == 0:
-            n_params = sum(p.numel() for p in self.model.parameters())
+            n_params = sum(p.numel() for p in self.raw_model.parameters())
             print(f"Model has {n_params:,} parameters")
 
         self.ema = None
@@ -70,20 +71,46 @@ class RFTTrainer(BaseTrainer):
             save_dict['scheduler'] = self.scheduler.state_dict()
         super().save(save_dict)
 
-    def load(self):
-        if hasattr(self.train_cfg, 'resume_ckpt') and self.train_cfg.resume_ckpt is not None:
-            save_dict = super().load(self.train_cfg.resume_ckpt)
-            has_ckpt = True
-        else:
-            print("Failed to load checkpoint")
-            return
+    def load(self) -> None:
+        """Build runtime objects and optionally restore a checkpoint."""
+        # ----- model & helpers -----
+        ckpt = getattr(self.train_cfg, "resume_ckpt", None)
+        state = None
+        if ckpt:
+            state = super().load(ckpt)
+            self.raw_model.load_state_dict(state["model"], strict=True)
+            self.total_step_counter = state.get("steps", 0)
 
-        self.model.load_state_dict(save_dict['model'])
-        self.ema.load_state_dict(save_dict['ema'])
-        self.opt.load_state_dict(save_dict['opt'])
-        if self.scheduler is not None and 'scheduler' in save_dict:
-            self.scheduler.load_state_dict(save_dict['scheduler'])
-        self.total_step_counter = save_dict['steps']
+        self.raw_model = self.raw_model.cuda()
+        if self.world_size > 1:
+            self.model = DDP(self.raw_model, device_ids=[self.local_rank])
+        else:
+            self.model = self.raw_model
+        self.model = torch.compile(self.model)
+
+        self.decoder = self.decoder.cuda().eval().bfloat16()
+        self.decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
+
+        # ----- EMA, optimiser, scheduler -----
+        self.ema = EMA(self.raw_model, beta=0.999, update_after_step=0, update_every=1)
+
+        if self.train_cfg.opt.lower() == "muon":
+            self.opt = init_muon(self.model, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
+        else:
+            self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
+
+        if self.train_cfg.scheduler:
+            sched_cls = get_scheduler_cls(self.train_cfg.scheduler)
+            self.scheduler = sched_cls(self.opt, **self.train_cfg.scheduler_kwargs)
+
+        # ----- optional checkpoint restore -----
+        if ckpt:
+            self.ema.load_state_dict(state["ema"])
+            self.opt.load_state_dict(state["opt"])
+            if self.scheduler and "scheduler" in state:
+                self.scheduler.load_state_dict(state["scheduler"])
+
+        del state
 
     @torch.no_grad()
     def update_buffer(self, name: str, value: torch.Tensor, value_ema: torch.Tensor | None = None):
@@ -102,33 +129,6 @@ class RFTTrainer(BaseTrainer):
     def train(self):
         torch.cuda.set_device(self.local_rank)
         print(f"Device used: rank={self.rank}")
-
-        # Prepare model and ema
-        self.model = self.model.cuda().train()
-
-        if self.world_size > 1:
-            self.model = DDP(self.model, device_ids=[self.local_rank])
-        self.model = torch.compile(self.model)
-
-        self.decoder = self.decoder.cuda().eval().bfloat16()
-        decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
-
-        self.ema = EMA(
-            self.model,
-            beta=0.999,
-            update_after_step=0,
-            update_every=1
-        )
-        #torch.compile(self.ema.ema_model.module.core if self.world_size > 1 else self.ema.ema_model.core, dynamic=False, fullgraph=True)
-
-        # Set up optimizer and scheduler
-        if self.train_cfg.opt.lower() == "muon":
-            self.opt = init_muon(self.model, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
-        else:
-            self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
-
-        if self.train_cfg.scheduler is not None:
-            self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)
 
         # Grad accum setup and scaler
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
@@ -193,8 +193,6 @@ class RFTTrainer(BaseTrainer):
                         self.scheduler.step()
                     self.ema.update()
 
-                    del loss
-
                     # Do logging
                     with torch.no_grad():
                         wandb_dict = metrics.pop()
@@ -204,7 +202,7 @@ class RFTTrainer(BaseTrainer):
                         # Sampling commented out for now
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx:
-                                eval_wandb_dict = self.eval_step(sample_loader, sampler, decode_fn)
+                                eval_wandb_dict = self.eval_step(sample_loader, sampler, self.decode_fn)
                                 gc.collect()
                                 torch.cuda.empty_cache()
                                 if self.rank == 0:
@@ -233,7 +231,7 @@ class RFTTrainer(BaseTrainer):
             return torch.cat(parts, dim=dim)
         dist.send(t, dst=0)
 
-    def eval_step(self, sample_loader, sampler, decode_fn=None):
+    def eval_step(self, sample_loader, sampler):
         ema_model = self.get_module(ema=True).core
 
         # ---- Generate Samples ----
@@ -246,7 +244,7 @@ class RFTTrainer(BaseTrainer):
         if self.sampler_only_return_generated:
             latent_vid, mouse, button = (x[:, vid.size(1):] for x in (latent_vid, mouse, button))
 
-        video_out = decode_fn(latent_vid * self.train_cfg.vae_scale) if decode_fn is not None else None
+        video_out = self.decode_fn(latent_vid * self.train_cfg.vae_scale) if self.decode_fn is not None else None
 
         # ---- Optionally Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
