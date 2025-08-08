@@ -46,17 +46,13 @@ class BaseTrainer:
         if self.world_size > 1:
             dist.barrier()
 
-    def get_module(self, ema = False):
-        if self.world_size == 1:
-            if ema:
-                return self.ema.ema_model
-            else:
-                return self.model
+    def get_module(self, ema=False):
+        if ema:
+            return self.ema.ema_model  # ema not wrapped in ddp
+        elif self.world_size == 1:
+            return self.model
         else:
-            if ema:
-                return self.ema.ema_model.module
-            else:
-                return self.model.module
+            return self.model.module
 
     def save(self, save_dict):
         os.makedirs(self.train_cfg.checkpoint_dir, exist_ok = True)
