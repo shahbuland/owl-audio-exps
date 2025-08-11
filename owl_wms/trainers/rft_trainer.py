@@ -21,9 +21,6 @@ from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn
 
 
-# core.transformer
-
-
 class RFTTrainer(BaseTrainer):
     """
     Trainer for rectified flow transformer

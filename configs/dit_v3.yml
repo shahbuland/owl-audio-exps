@@ -61,7 +61,7 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/video_dit_v2
+  checkpoint_dir: checkpoints/video_dit_v3
   output_path: /mnt/data/owl-wms/checkpoints/dit_v3
   resume_ckpt: null
 
@@ -90,4 +90,4 @@ train:
 wandb:
   name: louiscastricato  # lapp0-andrew-lapp
   project: video_models  # owl
-  run_name: video_dit_v2
+  run_name: video_dit_v3
