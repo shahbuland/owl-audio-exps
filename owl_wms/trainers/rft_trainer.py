@@ -86,7 +86,7 @@ class RFTTrainer(BaseTrainer):
             # Allow legacy checkpoints: strip module and _orig_mod
             pat = r'^(?:(?:_orig_mod\.|module\.)+)?([^.]+\.)?(?:(?:_orig_mod\.|module\.)+)?'
             state["model"] = {re.sub(pat, r'\1', k): v for k, v in state["model"].items()}
-            state["ema"]   = {re.sub(pat, r'\1', k): v for k, v in state["ema"].items()}
+            state["ema"] = {re.sub(pat, r'\1', k): v for k, v in state["ema"].items()}
 
             self.model.load_state_dict(state["model"], strict=True)
             self.total_step_counter = state.get("steps", 0)
