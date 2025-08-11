@@ -40,7 +40,6 @@ class RFTTrainer(BaseTrainer):
 
         model_id = self.model_cfg.model_id
         self.model = get_model_cls(model_id)(self.model_cfg).train()
-        self.model = None
 
         # Print model size
         if self.rank == 0:
