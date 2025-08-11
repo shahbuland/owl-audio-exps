@@ -3,6 +3,7 @@ from pathlib import Path
 import tqdm
 import wandb
 import gc
+import re
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -81,6 +82,10 @@ class RFTTrainer(BaseTrainer):
         state = None
         if ckpt:
             state = super().load(ckpt)
+
+            # Stripe module and _orig_mod
+            state = {re.sub(r'^(?:_orig_mod\.|module\.)+', '', k): v for k, v in state.items()}
+
             self.model.load_state_dict(state["model"], strict=True)
             self.total_step_counter = state.get("steps", 0)
 
