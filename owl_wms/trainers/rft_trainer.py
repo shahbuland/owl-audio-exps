@@ -84,7 +84,7 @@ class RFTTrainer(BaseTrainer):
             state = super().load(ckpt)
 
             # Stripe module and _orig_mod
-            state = {re.sub(r'^(?:_orig_mod\.|module\.)+', '', k): v for k, v in state.items()}
+            state["model"] = {re.sub(r'^(?:_orig_mod\.|module\.)+', '', k): v for k, v in state["model"].items()}
 
             self.model.load_state_dict(state["model"], strict=True)
             self.total_step_counter = state.get("steps", 0)
