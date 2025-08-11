@@ -161,7 +161,7 @@ class DiT(nn.Module):
         for layer_idx, block in enumerate(self.blocks):
             block_mask = local_block_mask if self.local_layers[layer_idx] else global_block_mask
 
-            if self.training and getattr(self.config, "gradient_checkpointing"):
+            if self.training and getattr(self.config, "gradient_checkpointing", False):
                 x = checkpoint(block, x, cond, block_mask, kv_cache)
             else:
                 x = block(x, cond, block_mask, kv_cache)
