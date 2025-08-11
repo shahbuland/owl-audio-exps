@@ -39,12 +39,12 @@ class RFTTrainer(BaseTrainer):
         super().__init__(*args, **kwargs)
 
         model_id = self.model_cfg.model_id
-        self.raw_model = get_model_cls(model_id)(self.model_cfg).train()
+        self.model = get_model_cls(model_id)(self.model_cfg).train()
         self.model = None
 
         # Print model size
         if self.rank == 0:
-            n_params = sum(p.numel() for p in self.raw_model.parameters())
+            n_params = sum(p.numel() for p in self.model.parameters())
             print(f"Model has {n_params:,} parameters")
 
         self.ema = None
@@ -61,9 +61,13 @@ class RFTTrainer(BaseTrainer):
         freeze(self.decoder)
 
     def save(self):
+        if self.rank != 0:
+            return
+
+        get_raw_model = lambda _model: getattr(_model, "module", _model)
         save_dict = {
-            'model': self.model.state_dict(),
-            'ema': self.ema.state_dict(),
+            'model': get_raw_model(self.model).state_dict(),
+            'ema': get_raw_model(self.ema).state_dict(),
             'opt': self.opt.state_dict(),
             'steps': self.total_step_counter
         }
@@ -78,21 +82,21 @@ class RFTTrainer(BaseTrainer):
         state = None
         if ckpt:
             state = super().load(ckpt)
-            self.raw_model.load_state_dict(state["model"], strict=True)
+            self.model.load_state_dict(state["model"], strict=True)
             self.total_step_counter = state.get("steps", 0)
 
-        self.raw_model = self.raw_model.cuda()
+        self.model = self.model.cuda()
         if self.world_size > 1:
-            self.model = DDP(self.raw_model, device_ids=[self.local_rank])
+            self.model = DDP(self.model, device_ids=[self.local_rank])
         else:
-            self.model = self.raw_model
+            self.model = self.model
         self.model = torch.compile(self.model)
 
         self.decoder = self.decoder.cuda().eval().bfloat16()
         self.decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
 
         # ----- EMA, optimiser, scheduler -----
-        self.ema = EMA(self.raw_model, beta=0.999, update_after_step=0, update_every=1)
+        self.ema = EMA(self.model, beta=0.999, update_after_step=0, update_every=1)
 
         if self.train_cfg.opt.lower() == "muon":
             self.opt = init_muon(self.model, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
@@ -213,8 +217,7 @@ class RFTTrainer(BaseTrainer):
 
                     self.total_step_counter += 1
                     if self.total_step_counter % self.train_cfg.save_interval == 0:
-                        if self.rank == 0:
-                            self.save()
+                        self.save()
 
                     self.barrier()
 
