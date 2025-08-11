@@ -40,7 +40,7 @@ train:
     dataset_path: /mnt/data/lapp0/BlackOpsColdWar/train_npy
     batch_columns: ["depth_latent", "mouse", "buttons"]
 
-  target_batch_size: 8
+  target_batch_size: 16
   batch_size: 1
 
   epochs: 10000
