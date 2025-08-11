@@ -59,14 +59,17 @@ class RFTTrainer(BaseTrainer):
 
         freeze(self.decoder)
 
+    @staticmethod
+    def get_raw_model(self, model):
+        return getattr(model, "module", model)
+
     def save(self):
         if self.rank != 0:
             return
 
-        get_raw_model = lambda _model: getattr(_model, "module", _model)
         save_dict = {
-            'model': get_raw_model(self.model).state_dict(),
-            'ema': get_raw_model(self.ema).state_dict(),
+            'model': self.get_raw_model(self.model).state_dict(),
+            'ema': self.get_raw_model(self.ema).state_dict(),
             'opt': self.opt.state_dict(),
             'steps': self.total_step_counter
         }
@@ -95,7 +98,7 @@ class RFTTrainer(BaseTrainer):
         self.decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
 
         # ----- EMA, optimiser, scheduler -----
-        self.ema = EMA(self.model, beta=0.999, update_after_step=0, update_every=1)
+        self.ema = EMA(self.get_raw_model(self.model), beta=0.999, update_after_step=0, update_every=1)
 
         if self.train_cfg.opt.lower() == "muon":
             self.opt = init_muon(self.model, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
