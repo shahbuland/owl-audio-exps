@@ -60,7 +60,7 @@ class RFTTrainer(BaseTrainer):
         freeze(self.decoder)
 
     @staticmethod
-    def get_raw_model(self, model):
+    def get_raw_model(model):
         return getattr(model, "module", model)
 
     def save(self):
