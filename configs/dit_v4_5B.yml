@@ -12,7 +12,7 @@ model:
   n_mouse_axes: 2
 
   cfg_prob: 0.1
-  n_frames: 256
+  n_frames: 1536
 
   causal: true
   uncond: false
@@ -30,7 +30,7 @@ train:
   trainer_id: rft
   data_id: sequence_packing
   data_kwargs:
-    window_length: 256
+    window_length: 1536
     dataset_path: /mnt/data/lapp0/BlackOpsColdWar/train_npy
     batch_columns: ["depth_latent", "mouse", "buttons"]
 
@@ -68,7 +68,7 @@ train:
   sampler_kwargs:
     n_steps: 16
     cfg_scale: 1.0
-    num_frames: 190
+    num_frames: 900
     noise_prev: 0.2
     only_return_generated: false
 
