@@ -30,7 +30,7 @@ train:
   trainer_id: rft
   data_id: sequence_packing
   data_kwargs:
-    window_length: 16  # 256
+    window_length: 256
     dataset_path: /mnt/data/lapp0/BlackOpsColdWar/train_npy
     batch_columns: ["depth_latent", "mouse", "buttons"]
 
