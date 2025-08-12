@@ -5,6 +5,12 @@ def get_trainer_cls(trainer_id):
         """
         from .causvid_v2 import CausVidTrainer
         return CausVidTrainer
+    if trainer_id == "causvid_vid":
+        """
+        CausvidTrainer does DMD to create few-step causal student
+        """
+        from .causvid_vid_only import CausVidTrainer
+        return CausVidTrainer
     if trainer_id == "av":
         """
         Most basic trainer. Does audio + video training.
