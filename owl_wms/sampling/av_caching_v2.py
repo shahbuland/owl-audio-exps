@@ -30,7 +30,7 @@ class AVCachingSampleV2:
         return x * (1. - alpha) + z * alpha
 
     @torch.no_grad()
-    def __call__(self, model, x, mouse, btn):
+    def __call__(self, model, x, mouse, btn, compile_on_decode = False):
         def get_mask(_x, window, offset = 0):
             return model.transformer.get_block_mask(
                 n_tokens(_x),
@@ -78,6 +78,9 @@ class AVCachingSampleV2:
 
         # START FRAME LOOP
         num_frames = min(self.num_frames, mouse.size(1) - init_len)
+
+        if compile_on_decode:
+            model = torch.compile(model)
         
         for idx in tqdm(range(num_frames), desc = "Sampling Frames..."):
             curr_x, curr_t = new_xt()
@@ -86,7 +89,7 @@ class AVCachingSampleV2:
             curr_mouse, curr_btn = mouse[:,start:start+1], btn[:,start:start+1]
             null_mouse = torch.zeros_like(curr_mouse)
             null_btn = torch.zeros_like(curr_btn)
-            
+
             # ==== STEP 2: Denoise the new frame ====
             for t_idx in range(self.n_steps):
                 # now we have [b,1,c,h,w] vid, [b,1,2] mouse, [b,1,nb] btn
@@ -96,7 +99,7 @@ class AVCachingSampleV2:
                     curr_mouse,
                     curr_btn,
                     kv_cache=kv_cache
-                )
+                ).clone()
                 if self.cfg_scale != 1.0:
                     pred_v_uncond = model(
                         curr_x,
@@ -104,7 +107,7 @@ class AVCachingSampleV2:
                         null_mouse,
                         null_btn,
                         kv_cache=kv_cache
-                    )
+                    ).clone()
                     pred_v = pred_v_uncond + self.cfg_scale * (pred_v - pred_v_uncond)
 
                 curr_x = curr_x - dt[t_idx] * pred_v   

@@ -12,7 +12,7 @@ from .rope import get_rope_cls
 
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 
-#create_block_mask = torch.compile(create_block_mask)
+create_block_mask = torch.compile(create_block_mask)
 flex_attention = torch.compile(flex_attention)
 
 
@@ -103,7 +103,11 @@ class Attn(nn.Module):
             k = k[:,:,-self.local_offset:]
             v = v[:,:,-self.local_offset:]
 
-        attn_out = flex_attention(q, k, v, block_mask=block_mask)
+        if block_mask is None:
+            attn_out = flex_attention(q, k, v)
+        else:
+            attn_out = flex_attention(q, k, v, block_mask=block_mask)
+
         attn_out = attn_out.permute(0, 2, 1, 3).contiguous().view(x.shape[0], L, -1)
 
         return self.out(attn_out)

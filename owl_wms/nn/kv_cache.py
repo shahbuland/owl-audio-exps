@@ -90,6 +90,12 @@ class SingleKVCache:
     def n_frames(self):
         assert len(self) % self.config.tokens_per_frame == 0
         return len(self) // self.config.tokens_per_frame
+    
+    def clone(self):
+        # Clones all tensors for max-autotune to work properly
+        for i in range(self.config.n_layers):
+            self.cache[i] = (self.cache[i][0].clone(), self.cache[i][1].clone())
+        return self
 
     @property
     def shape(self):
