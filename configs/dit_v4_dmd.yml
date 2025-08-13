@@ -28,7 +28,7 @@ train:
   trainer_id: causvid_vid
   data_id: cod
   data_kwargs:
-    window_length: 768
+    window_length: 60
     dataset_path: /mnt/data/lapp0/BlackOpsColdWar/train_npy
     batch_columns: ["depth_latent", "mouse", "buttons"]
 
@@ -38,8 +38,8 @@ train:
     dataset_path: /mnt/data/lapp0/BlackOpsColdWar/train_npy
     batch_columns: ["depth_latent", "mouse", "buttons"]
 
-  target_batch_size: 8
-  batch_size: 1
+  target_batch_size: 64
+  batch_size: 8
 
   epochs: 10000
 
@@ -66,7 +66,7 @@ train:
   teacher_ckpt: /mnt/data/lapp0/checkpoints/89220499/checkpoints/step_170000.pt
   student_ckpt: /mnt/data/lapp0/checkpoints/89220499/checkpoints/step_170000.pt
 
-  sample_interval: 100
+  sample_interval: 50
   save_interval: 10000
 
   sampler_id: av_caching
@@ -87,7 +87,9 @@ train:
   vae_cfg_path: /mnt/data/shahbuland/owl-vaes/configs/cod_yt_v2/base.yml
   vae_ckpt_path: /mnt/data/checkpoints/owl_vaes/cod_yt_v2/cod_yt_v2_515k_ema_decoder.pt
 
-  update_ratio: 1 #5
+  update_ratio: 5
+  ts_shift: 8
+  rollout_steps: 4
 
 wandb:
   name: shahbuland  # lapp0-andrew-lapp

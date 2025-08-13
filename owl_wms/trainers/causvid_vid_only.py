@@ -63,9 +63,23 @@ class SoftResetIterator:
 
 
 class RolloutManager:
-    def __init__(self, model_cfg):
+    def __init__(self, model_cfg, rollout_steps):
         self.model_cfg = model_cfg
-    
+        self.rollout_steps = rollout_steps
+
+    def sample_discrete_ts(self, video): 
+        """
+        Sample discrete ts from steps relevant to sampling
+        """
+        ts = torch.randint(
+            1, self.rollout_steps+1, 
+            (video.shape[0], video.shape[1]),
+            device = video.device,
+            dtype = video.dtype
+        ) # i.e. steps = 4 -> [1,2,3,4] / 4 -> [0.25, 0.5, 0.75, 1.0]
+        ts = ts / self.rollout_steps
+        return ts
+
     def get_rollouts(
         self, 
         model,
@@ -75,14 +89,7 @@ class RolloutManager:
     ):
 
         with torch.no_grad():
-            # Step 1: Pick half of each video to be generated
-            gen_mask = torch.rand(video.shape[0], video.shape[1]) < 0.5
-            gen_mask = gen_mask.to(device = video.device, dtype = torch.bool)
-
-            ts = torch.rand(video.shape[0], video.shape[1]) * 0.96 + 0.02 # U(0.02, 0.98)
-            ts = ts.to(device = video.device, dtype = video.dtype)
-
-            orig_video = video.clone() # Keep the clean video
+            ts = self.sample_discrete_ts(video)
             noisy_video = zlerp_batched(video, ts)
 
         v_pred = model(
@@ -96,12 +103,16 @@ class RolloutManager:
 
 # === LOSSES ===
 
+def shift_ts(t, s):
+    return t * s / (1 + (s - 1) * t) 
+
 def get_critic_loss(
     student, critic,
     video,
     mouse,
     btn,
-    rollout_manager
+    rollout_manager,
+    ts_shift = 8
 ):
     # Get rollout
     with torch.no_grad():
@@ -113,7 +124,9 @@ def get_critic_loss(
         )
 
         # Get ts ~ U(0.02, 0.98)
-        ts = torch.rand(video.shape[0], video.shape[1]) * 0.96 + 0.02
+        ts = torch.rand(video.shape[0], video.shape[1]).clamp(0.02, 0.98)
+        ts = shift_ts(ts, ts_shift)
+        
         ts = ts.to(video.device, video.dtype)
 
         noise = torch.randn_like(video)
@@ -136,7 +149,8 @@ def get_dmd_loss(
     mouse,
     btn,
     rollout_manager,
-    cfg_scale = 1.5
+    cfg_scale = 1.5,
+    ts_shift = 8
 ):
     # Get rollout
     video, mouse, btn = rollout_manager.get_rollouts(
@@ -147,7 +161,9 @@ def get_dmd_loss(
     )
     with torch.no_grad():
         # Get ts ~ U(0.02, 0.98)
-        ts = torch.rand(video.shape[0], video.shape[1]) * 0.96 + 0.02
+        ts = torch.rand(video.shape[0], video.shape[1]).clamp(0.02, 0.98)
+        ts = shift_ts(ts, ts_shift)
+
         ts = ts.to(video.device, video.dtype)
 
         # Get noise
@@ -272,6 +288,7 @@ class CausVidTrainer(BaseTrainer):
             'critic' : self.critic.state_dict(),
             'critic_opt' : self.critic_opt.state_dict(),
             'critic_scaler' : self.critic_scaler.state_dict(),
+            'steps' : self.total_step_counter
         }
         super().save(save_dict)
 
@@ -347,7 +364,7 @@ class CausVidTrainer(BaseTrainer):
 
         # Sampler
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
-        rollout_manager = RolloutManager(self.model_cfg)
+        rollout_manager = RolloutManager(self.model_cfg, self.train_cfg.rollout_steps)
 
         # Gradient accumulation setup
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
@@ -448,6 +465,7 @@ class CausVidTrainer(BaseTrainer):
         But we only care about the first video
         """
         vid, mouse, btn = next(sample_loader)
+        vid = vid / self.train_cfg.vae_scale
 
         mouses = [mouse]
         btns = [btn]
@@ -463,7 +481,7 @@ class CausVidTrainer(BaseTrainer):
         mouse = mouse[:1] # First batch element
         btn = btn[:1] # First batch element
 
-        latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda())
+        latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda(), euler_schedule = False)
 
         if True:
             latent_vid = latent_vid[:, vid.size(1):]

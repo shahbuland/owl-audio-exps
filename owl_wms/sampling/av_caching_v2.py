@@ -30,7 +30,7 @@ class AVCachingSampleV2:
         return x * (1. - alpha) + z * alpha
 
     @torch.no_grad()
-    def __call__(self, model, x, mouse, btn, compile_on_decode = False):
+    def __call__(self, model, x, mouse, btn, compile_on_decode = False, euler_schedule = True):
         def get_mask(_x, window, offset = 0):
             return model.transformer.get_block_mask(
                 n_tokens(_x),
@@ -43,6 +43,7 @@ class AVCachingSampleV2:
         batch_size, init_len = x.size(0), x.size(1)
 
         dt = get_sd3_euler(self.n_steps).to(device=x.device, dtype=x.dtype)
+        dt = [1./self.n_steps] * self.n_steps if not euler_schedule else dt
 
         kv_cache = KVCache(model.config)
         kv_cache.reset(batch_size)
