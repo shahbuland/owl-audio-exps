@@ -66,18 +66,31 @@ class RolloutManager:
     def __init__(self, model_cfg, rollout_steps):
         self.model_cfg = model_cfg
         self.rollout_steps = rollout_steps
+        self.noise_prev = 0.2
+        self.gen_mask_p = 0.5
 
     def sample_discrete_ts(self, video): 
         """
         Sample discrete ts from steps relevant to sampling
         """
+       # ts = torch.randint(
+        #    1, self.rollout_steps+1, 
+        #    (video.shape[0], video.shape[1]),
+        #    device = video.device,
+        #    dtype = video.dtype
+        #) # i.e. steps = 4 -> [1,2,3,4] / 4 -> [0.25, 0.5, 0.75, 1.0]
+        #ts = ts / self.rollout_steps
+
+        valid_ts_list = torch.tensor([1.0, 0.9, 0.75, 0.5], device = video.device, dtype = video.dtype)
+        
+        # Make ts of [video.shape[0], video.shape[1]] with values in valid_ts_list
         ts = torch.randint(
-            1, self.rollout_steps+1, 
+            0, len(valid_ts_list),
             (video.shape[0], video.shape[1]),
             device = video.device,
-            dtype = video.dtype
-        ) # i.e. steps = 4 -> [1,2,3,4] / 4 -> [0.25, 0.5, 0.75, 1.0]
-        ts = ts / self.rollout_steps
+            dtype = torch.long
+        )
+        ts = valid_ts_list[ts]
         return ts
 
     def get_rollouts(
@@ -89,17 +102,30 @@ class RolloutManager:
     ):
 
         with torch.no_grad():
-            ts = self.sample_discrete_ts(video)
-            noisy_video = zlerp_batched(video, ts)
+            # Sample mask: True for frames to generate, False for context
+            p = getattr(self, "gen_mask_p", 0.5)
+            gen_mask = (torch.rand(video.shape[0], video.shape[1], device=video.device) < p)
 
+            ts = self.sample_discrete_ts(video)  # [b, n]
+            ts_full = torch.where(gen_mask, ts, torch.full_like(ts, self.noise_prev))
+            noisy_video = zlerp_batched(video, ts_full)
+
+            orig_video = video.clone()
+        
         v_pred = model(
             noisy_video,
-            ts,
+            ts_full,
             mouse,
             btn
         )
 
-        return noisy_video - v_pred*ts[:,:,None,None,None], mouse, btn
+        video = torch.where(
+            gen_mask[:,:,None,None,None],
+            noisy_video - v_pred*ts_full[:,:,None,None,None],
+            video
+        )
+
+        return video, mouse, btn, gen_mask, orig_video
 
 # === LOSSES ===
 
@@ -116,7 +142,7 @@ def get_critic_loss(
 ):
     # Get rollout
     with torch.no_grad():
-        video, mouse, btn = rollout_manager.get_rollouts(
+        video, mouse, btn, _, _ = rollout_manager.get_rollouts(
             model = student,
             video = video,
             mouse = mouse,
@@ -153,7 +179,7 @@ def get_dmd_loss(
     ts_shift = 8
 ):
     # Get rollout
-    video, mouse, btn = rollout_manager.get_rollouts(
+    video, mouse, btn, grad_mask, orig_video = rollout_manager.get_rollouts(
         model = student,
         video = video,
         mouse = mouse,
@@ -202,9 +228,9 @@ def get_dmd_loss(
         # Get predictions mu_real, mu_fake
         mu_teacher_vid = noisy_vid - ts[:,:,None,None,None] * v_teacher_vid
         mu_critic_vid = noisy_vid - ts[:,:,None,None,None] * v_critic_vid
-        
+
         # Get normalizers
-        vid_normalizer = torch.abs(video - mu_teacher_vid).mean(dim=[1,2,3,4],keepdim=True)
+        vid_normalizer = torch.abs(video - mu_teacher_vid).mean(dim=[1,2,3,4], keepdim=True)
 
         # Get gradients
         grad_vid = (mu_critic_vid - mu_teacher_vid) / vid_normalizer
@@ -213,13 +239,24 @@ def get_dmd_loss(
         # Get targets
         target_vid = (video.double() - grad_vid.double()).detach()
 
-    # Get losses
-    vid_loss = 0.5 * F.mse_loss(
-        video.double(),
-        target_vid,
-        reduction = 'mean'
+
+    grad_mask_exp = grad_mask[:, :, None, None, None]
+
+    # Get losses, only where grad_mask is true
+    dmd_loss = 0.5 * F.mse_loss(
+        video.double() * grad_mask_exp,
+        target_vid * grad_mask_exp,
+        reduction='mean'
     )
-    return vid_loss
+
+    regression_loss = F.mse_loss(
+        video * grad_mask_exp, 
+        orig_video * grad_mask_exp,
+        reduction='mean'
+    )
+
+    # Get regression loss for original video
+    return dmd_loss, regression_loss 
 
 class CausVidTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
@@ -373,7 +410,7 @@ class CausVidTrainer(BaseTrainer):
         # optimizer step
         def optimizer_step(model, scaler, optimizer):
             scaler.unscale_(optimizer)
-            g_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            g_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
             scaler.step(optimizer)
             optimizer.zero_grad(set_to_none=True)
             scaler.update()
@@ -415,7 +452,7 @@ class CausVidTrainer(BaseTrainer):
                 vid, mouse, btn = get_batch()
                 
                 with ctx:
-                    dmd_loss = get_dmd_loss(
+                    dmd_loss, regression_loss = get_dmd_loss(
                         student = self.student,
                         critic = self.critic,
                         teacher = self.teacher,
@@ -423,9 +460,14 @@ class CausVidTrainer(BaseTrainer):
                         mouse = mouse,
                         btn = btn,
                         rollout_manager = rollout_manager
-                    ) / accum_steps
+                    )
+                    dmd_loss = dmd_loss / accum_steps
+                    regression_loss = regression_loss / accum_steps
                     metrics.log('dmd_loss', dmd_loss)
-                    self.scaler.scale(dmd_loss).backward()
+                    metrics.log('regression_loss', regression_loss)
+
+                    gen_loss = dmd_loss + 0.25 * regression_loss
+                    self.scaler.scale(gen_loss).backward()
 
                 g_norm = optimizer_step(self.student, self.scaler, self.opt)
                 metrics.log('g_norm', g_norm)
@@ -481,7 +523,7 @@ class CausVidTrainer(BaseTrainer):
         mouse = mouse[:1] # First batch element
         btn = btn[:1] # First batch element
 
-        latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda(), euler_schedule = False)
+        latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda())
 
         if True:
             latent_vid = latent_vid[:, vid.size(1):]

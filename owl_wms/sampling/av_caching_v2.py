@@ -8,6 +8,18 @@ from .schedulers import get_sd3_euler
 def n_tokens(vid):
     return vid.size(1) * vid.size(3) * vid.size(4)
 
+def get_deltas(custom_schedule):
+    if custom_schedule[-1] != 0.0:
+        custom_schedule.append(0.0)
+
+    deltas = []
+    crnt = custom_schedule[0]
+    for nxt in custom_schedule[1:]:
+        deltas.append(abs(nxt - crnt))
+        crnt = nxt
+
+    return deltas
+
 class AVCachingSampleV2:
     """
     Parameters
@@ -17,12 +29,13 @@ class AVCachingSampleV2:
     :param num_frames: Number of new frames to sample
     :param noise_prev: Noise previous frame
     """
-    def __init__(self, n_steps: int = 16, cfg_scale: float = 1.3, num_frames: int = 60, noise_prev: float = 0.2, max_window = None) -> None:
+    def __init__(self, n_steps: int = 16, cfg_scale: float = 1.3, num_frames: int = 60, noise_prev: float = 0.2, max_window = None, custom_schedule = None) -> None:
         self.cfg_scale = cfg_scale
         self.n_steps = n_steps
         self.num_frames = num_frames
         self.noise_prev = noise_prev
         self.max_window = max_window
+        self.custom_schedule = custom_schedule
 
     @staticmethod
     def zlerp(x, alpha):
@@ -30,7 +43,7 @@ class AVCachingSampleV2:
         return x * (1. - alpha) + z * alpha
 
     @torch.no_grad()
-    def __call__(self, model, x, mouse, btn, compile_on_decode = False, euler_schedule = True):
+    def __call__(self, model, x, mouse, btn, compile_on_decode = False):
         def get_mask(_x, window, offset = 0):
             return model.transformer.get_block_mask(
                 n_tokens(_x),
@@ -42,8 +55,10 @@ class AVCachingSampleV2:
         
         batch_size, init_len = x.size(0), x.size(1)
 
-        dt = get_sd3_euler(self.n_steps).to(device=x.device, dtype=x.dtype)
-        dt = [1./self.n_steps] * self.n_steps if not euler_schedule else dt
+        if self.custom_schedule is None:
+            dt = get_sd3_euler(self.n_steps).to(device=x.device, dtype=x.dtype)
+        else:
+            dt = get_deltas(self.custom_schedule)
 
         kv_cache = KVCache(model.config)
         kv_cache.reset(batch_size)
