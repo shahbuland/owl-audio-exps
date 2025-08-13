@@ -13,6 +13,7 @@ from ..nn.kv_cache import KVCache
 from ..utils.logging import LogHelper, to_wandb_av
 from ..data import get_loader
 from ..sampling import get_sampler_cls
+from ..nn.rope import cast_rope_buffers_to_fp32
 
 from copy import deepcopy
 from ema_pytorch import EMA
@@ -38,12 +39,32 @@ def lerp_batched(x, z, t):
     t = t[:,:,None,None,None]
     return x * (1. - t) + z * t
 
+class SoftResetIterator:
+    """
+    Wraps an iterable (e.g., DataLoader) so that when exhausted,
+    it automatically resets and continues yielding items.
+    """
+    def __init__(self, iterable):
+        self._iterable = iterable
+        self._reset_iter()
+
+    def _reset_iter(self):
+        self._iterator = iter(self._iterable)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            self._reset_iter()
+            return next(self._iterator)
+
+
 class RolloutManager:
-    def __init__(self, model_cfg, min_rollout_frames=8, rollout_steps = 1):
+    def __init__(self, model_cfg):
         self.model_cfg = model_cfg
-        self.min_rollout_frames = min_rollout_frames
-        self.rollout_steps = rollout_steps
-        self.noise_prev = 0.2
     
     def get_rollouts(
         self, 
@@ -279,6 +300,8 @@ class CausVidTrainer(BaseTrainer):
         self.teacher = self.teacher.cuda().eval().bfloat16()
         self.decoder = self.decoder.cuda().eval().bfloat16()
 
+        cast_rope_buffers_to_fp32(self.teacher)
+
         # Training modules are train+cuda
         self.student = self.student.cuda().train()
         self.critic = self.critic.cuda().train()
@@ -318,13 +341,13 @@ class CausVidTrainer(BaseTrainer):
         
         # Dataset and sampling prep
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
-        loader = iter(loader)
+        loader = SoftResetIterator(loader)
         sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.batch_size, **self.train_cfg.sample_data_kwargs)
-        sample_loader = iter(sample_loader)
+        sample_loader = SoftResetIterator(sample_loader)
 
         # Sampler
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
-        rollout_manager = RolloutManager(self.model_cfg, self.train_cfg.min_rollout_frames, self.train_cfg.rollout_steps)
+        rollout_manager = RolloutManager(self.model_cfg)
 
         # Gradient accumulation setup
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
@@ -417,6 +440,7 @@ class CausVidTrainer(BaseTrainer):
     @torch.no_grad()
     def eval_step(self, sample_loader, sampler, decode_fn = None):
         model = self.ema.ema_model.module if self.world_size > 1 else self.ema.ema_model
+        model = model.eval()
 
         """
         In order to get nice samples to draw,
@@ -439,9 +463,9 @@ class CausVidTrainer(BaseTrainer):
         mouse = mouse[:1] # First batch element
         btn = btn[:1] # First batch element
 
-        latent_vid = sampler(model, vid, mouse, btn)
+        latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda())
 
-        if self.sampler_only_return_generated:
+        if True:
             latent_vid = latent_vid[:, vid.size(1):]
             mouse = mouse[:, vid.size(1):]
             btn = btn[:, vid.size(1):]
@@ -453,8 +477,10 @@ class CausVidTrainer(BaseTrainer):
 
         def gather_concat_cpu(t, dim=0):
             if self.rank == 0:
-                parts = [t.cpu()]
-                scratch = torch.empty_like(t)
+                # Ensure tensor is on GPU for distributed communication
+                t_gpu = t.cuda() if t.device.type == 'cpu' else t
+                parts = [t_gpu.cpu()]
+                scratch = torch.empty_like(t_gpu)  # scratch on GPU
                 for src in range(self.world_size):
                     if src == 0:
                         continue
@@ -462,7 +488,9 @@ class CausVidTrainer(BaseTrainer):
                     parts.append(scratch.cpu())
                 return torch.cat(parts, dim=dim)
             else:
-                dist.send(t, dst=0)
+                # Ensure tensor is on GPU for distributed communication
+                t_gpu = t.cuda() if t.device.type == 'cpu' else t
+                dist.send(t_gpu, dst=0)
                 return None
 
         # ---- Save Latent Artifacts ----
@@ -491,5 +519,7 @@ class CausVidTrainer(BaseTrainer):
         else:
             eval_wandb_dict = None
         self.barrier()
+
+        model = model.train()
 
         return eval_wandb_dict

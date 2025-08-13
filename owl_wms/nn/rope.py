@@ -17,6 +17,13 @@ def get_rope_cls(cls_name):
     else:
         raise ValueError(f"Invalid RoPE class: {cls_name}")
 
+def cast_rope_buffers_to_fp32(module):
+    for submodule in module.modules():
+        if isinstance(submodule, RoPE):
+            if hasattr(submodule, "cos"):
+                submodule.cos = submodule.cos.float()
+            if hasattr(submodule, "sin"):
+                submodule.sin = submodule.sin.float()
 
 class RoPE(nn.Module):
     def __init__(self, config):
