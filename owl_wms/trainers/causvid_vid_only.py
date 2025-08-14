@@ -23,6 +23,42 @@ import random
 import wandb
 import gc
 from pathlib import Path
+import wandb
+
+@torch.no_grad()
+def log_decoded_images(tensor, decode_fn, key, n_images = 16):
+    """
+    Given a tensor of shape [b, c, h, w], decode and log images to wandb.
+
+    Args:
+        tensor: torch.Tensor of shape [b, c, h, w]
+        decode_fn: function that takes [b, c, h, w] and returns images in [-1, 1] (float32)
+        key: str, wandb log key
+    """
+    # Flatten tensor from [b, n, c, h, w] to [b * n, c, h, w] if needed
+    if tensor.dim() == 5:
+        b, n, c, h, w = tensor.shape
+        tensor = tensor.reshape(b * n, c, h, w)
+    idx = torch.randperm(tensor.shape[0])[:n_images]
+    tensor = tensor[idx]
+    tensor = tensor.unsqueeze(0)
+    with torch.no_grad():
+        # Ensure tensor is on cpu and float32
+        tensor = tensor.detach().cuda().bfloat16()
+        # Decode to images in [-1, 1]
+        imgs = decode_fn(tensor).float().cpu().squeeze(0)
+        # Clamp to [-1, 1]
+        imgs = torch.clamp(imgs, -1, 1)
+        # Map to [0, 1]
+        imgs = (imgs + 1) / 2
+        # Convert to numpy for wandb
+        imgs = imgs.permute(0, 2, 3, 1).cpu().numpy()  # [b, h, w, c]
+        # If single channel, repeat to 3 channels for visualization
+        if imgs.shape[-1] == 1:
+            imgs = imgs.repeat(1, 1, 1, 3)
+        # Log as a list of wandb.Image
+        wandb_imgs = [wandb.Image(img) for img in imgs]
+        wandb.log({key: wandb_imgs})
 
 # === ROLLOUTS ===
 
@@ -67,7 +103,7 @@ class RolloutManager:
         self.model_cfg = model_cfg
         self.rollout_steps = rollout_steps
         self.noise_prev = 0.2
-        self.gen_mask_p = 0.5
+        self.gen_mask_p = 0.25
 
     def sample_discrete_ts(self, video): 
         """
@@ -81,7 +117,7 @@ class RolloutManager:
         #) # i.e. steps = 4 -> [1,2,3,4] / 4 -> [0.25, 0.5, 0.75, 1.0]
         #ts = ts / self.rollout_steps
 
-        valid_ts_list = torch.tensor([1.0, 0.9, 0.75, 0.5], device = video.device, dtype = video.dtype)
+        valid_ts_list = torch.tensor([1.0], device = video.device, dtype = video.dtype)
         
         # Make ts of [video.shape[0], video.shape[1]] with values in valid_ts_list
         ts = torch.randint(
@@ -103,10 +139,10 @@ class RolloutManager:
 
         with torch.no_grad():
             # Sample mask: True for frames to generate, False for context
-            p = getattr(self, "gen_mask_p", 0.5)
-            gen_mask = (torch.rand(video.shape[0], video.shape[1], device=video.device) < p)
-
+            gen_mask = (torch.rand(video.shape[0], video.shape[1], device=video.device) < self.gen_mask_p)
+            #ts = torch.randn(video.shape[0], video.shape[1], device=video.device, dtype = video.dtype).sigmoid()
             ts = self.sample_discrete_ts(video)  # [b, n]
+            
             ts_full = torch.where(gen_mask, ts, torch.full_like(ts, self.noise_prev))
             noisy_video = zlerp_batched(video, ts_full)
 
@@ -142,7 +178,7 @@ def get_critic_loss(
 ):
     # Get rollout
     with torch.no_grad():
-        video, mouse, btn, _, _ = rollout_manager.get_rollouts(
+        video, mouse, btn, grad_mask, _ = rollout_manager.get_rollouts(
             model = student,
             video = video,
             mouse = mouse,
@@ -150,10 +186,11 @@ def get_critic_loss(
         )
 
         # Get ts ~ U(0.02, 0.98)
-        ts = torch.rand(video.shape[0], video.shape[1]).clamp(0.02, 0.98)
-        ts = shift_ts(ts, ts_shift)
+        #ts = torch.rand(video.shape[0], video.shape[1]).clamp(0.02, 0.98)
+        #ts = shift_ts(ts, ts_shift)
+        ts = torch.randn(video.shape[0], video.shape[1], device=video.device, dtype = video.dtype).sigmoid()
         
-        ts = ts.to(video.device, video.dtype)
+        #ts = ts.to(video.device, video.dtype)
 
         noise = torch.randn_like(video)
         noisy_vid = lerp_batched(video, noise, ts)
@@ -166,7 +203,8 @@ def get_critic_loss(
         btn
     )
 
-    vid_loss = F.mse_loss(pred_vid, target_vid)
+    grad_mask_exp = grad_mask[:, :, None, None, None]
+    vid_loss = F.mse_loss(pred_vid * grad_mask_exp, target_vid * grad_mask_exp)
     return vid_loss
 
 def get_dmd_loss(
@@ -176,7 +214,9 @@ def get_dmd_loss(
     btn,
     rollout_manager,
     cfg_scale = 1.5,
-    ts_shift = 8
+    ts_shift = 8,
+    decode_fn = None,
+    log_predictions = False
 ):
     # Get rollout
     video, mouse, btn, grad_mask, orig_video = rollout_manager.get_rollouts(
@@ -187,10 +227,10 @@ def get_dmd_loss(
     )
     with torch.no_grad():
         # Get ts ~ U(0.02, 0.98)
-        ts = torch.rand(video.shape[0], video.shape[1]).clamp(0.02, 0.98)
-        ts = shift_ts(ts, ts_shift)
-
-        ts = ts.to(video.device, video.dtype)
+        #ts = torch.rand(video.shape[0], video.shape[1]).clamp(0.02, 0.98)
+        #ts = shift_ts(ts, ts_shift)
+        ts = torch.randn(video.shape[0], video.shape[1], device=video.device, dtype = video.dtype).sigmoid()
+        #ts = ts.to(video.device, video.dtype)
 
         # Get noise
         noise = torch.randn_like(video)
@@ -234,10 +274,20 @@ def get_dmd_loss(
 
         # Get gradients
         grad_vid = (mu_critic_vid - mu_teacher_vid) / vid_normalizer
+
+        if torch.isnan(grad_vid).any():
+            print("Warning: grad_vid contains NaNs")
+
         grad_vid = torch.nan_to_num(grad_vid, nan=0.0)
 
         # Get targets
         target_vid = (video.double() - grad_vid.double()).detach()
+
+        if log_predictions:
+            log_decoded_images(video[grad_mask], decode_fn, "video")
+            log_decoded_images(target_vid[grad_mask], decode_fn, "target_vid")
+            log_decoded_images(mu_teacher_vid[grad_mask], decode_fn, "mu_teacher_vid")
+            log_decoded_images(mu_critic_vid[grad_mask], decode_fn, "mu_critic_vid")
 
 
     grad_mask_exp = grad_mask[:, :, None, None, None]
@@ -277,7 +327,7 @@ class CausVidTrainer(BaseTrainer):
             self.teacher.load_state_dict(teacher_ckpt)
         except:
             self.teacher.core.load_state_dict(teacher_ckpt)
-    
+
         # === init student (and fake score fn) ===
         student_ckpt_path = self.train_cfg.student_ckpt
         student_ckpt = versatile_load(student_ckpt_path)
@@ -315,6 +365,8 @@ class CausVidTrainer(BaseTrainer):
             self.train_cfg.vae_cfg_path,
             self.train_cfg.vae_ckpt_path
         )
+
+        freeze(self.teacher)
     
     def save(self):
         save_dict = {
@@ -351,7 +403,7 @@ class CausVidTrainer(BaseTrainer):
         torch.cuda.set_device(self.local_rank)
 
         # Inference only modules are frozen eval+cuda+bf16
-        self.teacher = self.teacher.cuda().eval().bfloat16()
+        self.teacher = self.teacher.cuda().bfloat16()
         self.decoder = self.decoder.cuda().eval().bfloat16()
 
         cast_rope_buffers_to_fp32(self.teacher)
@@ -459,7 +511,9 @@ class CausVidTrainer(BaseTrainer):
                         video = vid,
                         mouse = mouse,
                         btn = btn,
-                        rollout_manager = rollout_manager
+                        rollout_manager = rollout_manager,
+                        decode_fn = frame_decode_fn,
+                        log_predictions = (self.rank == 0 and self.total_step_counter % self.train_cfg.sample_interval == 0 and self.train_cfg.log_predictions)
                     )
                     dmd_loss = dmd_loss / accum_steps
                     regression_loss = regression_loss / accum_steps
@@ -520,8 +574,8 @@ class CausVidTrainer(BaseTrainer):
         btns = torch.cat(btns, dim=0)
 
         mouse, btn = batch_permute_to_length(mouses, btns, sampler.num_frames + vid.size(1))
-        mouse = mouse[:1] # First batch element
-        btn = btn[:1] # First batch element
+        mouse = mouse[:vid.size(0)] # First batch element
+        btn = btn[:vid.size(0)] # First batch element
 
         latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda())
 
