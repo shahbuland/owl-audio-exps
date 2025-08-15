@@ -39,3 +39,12 @@ print(out.requires_grad)
 # Try backward on mean
 out.mean().backward()
 print("Backward successful, video.grad is None?", video.grad is None)
+
+num_params = 0
+num_params_with_grad = 0
+for param in student.parameters():
+    num_params += 1
+    if param.grad is not None:
+        num_params_with_grad += 1
+print(f"{num_params_with_grad} / {num_params} parameters have gradients")
+
