@@ -145,7 +145,8 @@ class AVCachingSampleV2:
                 kv_cache=kv_cache
             )
             kv_cache.disable_cache_updates()
-            kv_cache.truncate(1, front=False) # Eject oldest
+            if self.max_window is not None and len(latents) > self.max_window:
+                kv_cache.truncate(1, front=False) # Eject oldest
 
         model.transformer.disable_decoding()
 

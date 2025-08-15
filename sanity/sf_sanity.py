@@ -2,12 +2,16 @@ import torch
 from owl_wms.configs import Config
 from owl_wms.models import get_model_cls
 from owl_wms.nn.kv_cache import KVCache
+from owl_wms.utils import versatile_load, freeze, unfreeze, Timer
 
 # Load config
 cfg = Config.from_yaml("configs/dit_v4_sf.yml").model
 
 # Instantiate student model
 student = get_model_cls(cfg.model_id)(cfg).cuda().train().core
+
+freeze(student)
+unfreeze(student)
 
 # Make empty kv cache (no context frames cached)
 kv_cache = KVCache(cfg)
@@ -33,7 +37,7 @@ btn = torch.randn(1, 1, 11, device='cuda')
 ts = torch.zeros(1, 1, device='cuda')  # dummy timestep
 
 # Forward pass
-out = student(video, ts, mouse, btn, kv_cache=kv_cache)
+out = student(video.detach(), ts.detach(), mouse.detach(), btn.detach(), kv_cache=kv_cache)
 print(out.requires_grad)
 
 # Try backward on mean
