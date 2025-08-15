@@ -71,11 +71,12 @@ train:
 
   sampler_id: av_caching
   sampler_kwargs:
-    n_steps: 1
+    n_steps: 2
     #window_length: 16
     cfg_scale: 1.0
     num_frames: 120
     noise_prev: 0.2
+    custom_schedule: [1.0, 0.5]
 
   n_samples: 4
   eval_sample_dir: null
@@ -91,6 +92,7 @@ train:
   ts_shift: 8
   rollout_steps: 4
   log_predictions: false
+  regression_weight: 0.0
 
 wandb:
   name: shahbuland  # lapp0-andrew-lapp

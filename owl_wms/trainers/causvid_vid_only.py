@@ -117,7 +117,7 @@ class RolloutManager:
         #) # i.e. steps = 4 -> [1,2,3,4] / 4 -> [0.25, 0.5, 0.75, 1.0]
         #ts = ts / self.rollout_steps
 
-        valid_ts_list = torch.tensor([1.0], device = video.device, dtype = video.dtype)
+        valid_ts_list = torch.tensor([1.0, 0.5], device = video.device, dtype = video.dtype)
         
         # Make ts of [video.shape[0], video.shape[1]] with values in valid_ts_list
         ts = torch.randint(
@@ -520,7 +520,7 @@ class CausVidTrainer(BaseTrainer):
                     metrics.log('dmd_loss', dmd_loss)
                     metrics.log('regression_loss', regression_loss)
 
-                    gen_loss = dmd_loss + 0.25 * regression_loss
+                    gen_loss = dmd_loss + self.train_cfg.regression_weight * regression_loss
                     self.scaler.scale(gen_loss).backward()
 
                 g_norm = optimizer_step(self.student, self.scaler, self.opt)
@@ -553,8 +553,6 @@ class CausVidTrainer(BaseTrainer):
     @torch.no_grad()
     def eval_step(self, sample_loader, sampler, decode_fn = None):
         model = self.ema.ema_model.module if self.world_size > 1 else self.ema.ema_model
-        model = model.eval()
-
         """
         In order to get nice samples to draw,
         We take many many samples then take controls from them.
@@ -633,7 +631,5 @@ class CausVidTrainer(BaseTrainer):
         else:
             eval_wandb_dict = None
         self.barrier()
-
-        model = model.train()
 
         return eval_wandb_dict
