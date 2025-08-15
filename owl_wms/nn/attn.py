@@ -150,6 +150,13 @@ class DiT(nn.Module):
 
         self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
         self.blocks = nn.ModuleList([DiTBlock(config, idx, local) for idx, local in enumerate(self.local_layers)])
+        self.decoding = False
+
+    def enable_decoding(self):
+        self.decoding = True
+
+    def disable_decoding(self):
+        self.decoding = False
 
     def get_block_mask(self, seq_len, doc_id, window_len, q_offset, device):
         n_tokens = seq_len + q_offset
@@ -165,11 +172,11 @@ class DiT(nn.Module):
 
     def forward(self, x, cond, doc_id=None, kv_cache=None, local_block_mask = None, global_block_mask = None):
         seq_len, device = x.size(1), x.device
-        q_offset = kv_cache.get_offset(0) if kv_cache is not None else 0
+        q_offset = kv_cache.length_at(0) if kv_cache is not None else 0
 
-        if local_block_mask is None and self.training:
+        if local_block_mask is None and not self.decoding:
             local_block_mask = self.get_block_mask(seq_len, doc_id, self.config.local_window, q_offset, device)
-        if global_block_mask is None and self.training:
+        if global_block_mask is None and not self.decoding:
             global_block_mask = self.get_block_mask(seq_len, doc_id, self.config.global_window, q_offset, device)
 
         for layer_idx, block in enumerate(self.blocks):

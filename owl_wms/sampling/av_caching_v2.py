@@ -97,6 +97,8 @@ class AVCachingSampleV2:
 
         if compile_on_decode:
             model = torch.compile(model)
+
+        model.transformer.enable_decoding()
         
         for idx in tqdm(range(num_frames), desc = "Sampling Frames..."):
             curr_x, curr_t = new_xt()
@@ -143,6 +145,9 @@ class AVCachingSampleV2:
                 kv_cache=kv_cache
             )
             kv_cache.disable_cache_updates()
+            kv_cache.truncate(1, front=False) # Eject oldest
+
+        model.transformer.disable_decoding()
 
         return torch.cat(latents, dim = 1)
 
