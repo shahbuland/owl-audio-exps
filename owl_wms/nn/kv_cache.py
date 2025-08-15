@@ -39,7 +39,6 @@ class SingleKVCache:
         self.cache = [(torch.empty_like(dummy), torch.empty_like(dummy)) for _ in range(self.config.n_layers)]
         self.offsets = [0] * self.config.n_layers
 
-    @torch.no_grad()
     def get(self, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
         k,v = self.cache[layer_ind]
@@ -48,7 +47,6 @@ class SingleKVCache:
             v = v + torch.randn_like(v) * self.noise_caches
         return k,v
 
-    @torch.no_grad()
     def update(self, new_k, new_v, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
 
@@ -59,7 +57,6 @@ class SingleKVCache:
 
         self.cache[layer_ind] = (new_k,new_v)
 
-    @torch.no_grad()
     def truncate(self, truncate_amt, front = False):
         """
         Truncate/eject frames from the KV cache
@@ -95,6 +92,11 @@ class SingleKVCache:
         # Clones all tensors for max-autotune to work properly
         for i in range(self.config.n_layers):
             self.cache[i] = (self.cache[i][0].clone(), self.cache[i][1].clone())
+        return self
+    
+    def detach(self):
+        for i in range(self.config.n_layers):
+            self.cache[i] = (self.cache[i][0].detach(), self.cache[i][1].detach())
         return self
 
     @property
