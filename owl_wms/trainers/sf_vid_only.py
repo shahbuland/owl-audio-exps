@@ -24,11 +24,12 @@ import wandb
 import gc
 from pathlib import Path
 import wandb
+import contextvars
 
 def backward_and_check(model, tensor):
     tensor.mean().backward()
     total = 0
-    for n, p in self.student.named_parameters():
+    for n, p in model.named_parameters():
         if p.grad is not None:
             total += (p.grad.abs().sum().item() > 0)
     print(f"{total} parameters received gradient")  
@@ -119,16 +120,12 @@ class RolloutManager:
         mouse,
         btn
     ):
-        def get_tokens(_vid):
-            _, n, _, h, w = _vid.shape
-            return n * h * w
 
-        get_block_mask = model.module.transformer.get_block_mask if hasattr(model, 'module') else model.transformer.get_block_mask
-            
-        def get_masks(model, seq_len, cache_offset):
-            local_mask = get_block_mask(seq_len, None, model.module.config.local_window, cache_offset, video.device)
-            global_mask = get_block_mask(seq_len, None, model.module.config.global_window, cache_offset, video.device)
-            return local_mask, global_mask
+        def get_module():
+            if hasattr(model, 'module'):
+                return model.module
+            else:
+                return model
 
         # === init kv cache ===
         kv_cache = KVCache(self.model_cfg)
@@ -145,26 +142,26 @@ class RolloutManager:
         # === extend control inputs for open-ended generation ===
         ext_mouse, ext_btn = batch_permute_to_length(mouse, btn, window_length + rollout_frames)
         rollout_mouse = ext_mouse[:, window_length:]
-        rollout_btn = ext_btn[:, window_length:]
+        rollout_btn = ext_btn[:, window_length:] 
+
+        ts = torch.zeros_like(video[:, :, 0, 0, 0])  # [b, n]
 
         # === cache context frames ===
+
+        # Warmup call prevents autograd errors (???)
+        _ = model(torch.randn_like(video)[:,:1], torch.randn_like(ts)[:,:1], torch.randn_like(mouse)[:,:1], torch.randn_like(btn)[:,:1])
+
         with torch.no_grad():
-            local_mask, global_mask = get_masks(model, get_tokens(video), 0)
-
             kv_cache.enable_cache_updates()
-            ts = torch.zeros_like(video[:, :, 0, 0, 0])  # [b, n]
-            model(video, ts, mouse, btn, kv_cache=kv_cache, local_block_mask=local_mask, global_block_mask=global_mask)
+            model(video, ts, mouse, btn, kv_cache=kv_cache)
             kv_cache.disable_cache_updates()
-        if torch.is_grad_enabled():
-            video.requires_grad = True
-
-        # === rollout time! ===
-        gen_mask = torch.zeros((video.shape[0], window_length + rollout_frames), dtype=torch.bool, device=video.device)
+  
         # Mark context frames as False, generated frames as True
+        gen_mask = torch.zeros((video.shape[0], window_length + rollout_frames), dtype=torch.bool, device=video.device)
         gen_mask[:, window_length:] = True
 
-        # Since we are ejecting, this stays constant
-        model.module.transformer.enable_decoding()
+        # === rollout time! ===
+        get_module().transformer.enable_decoding()
 
         for frame_idx in range(rollout_frames):
             ts_1 = torch.ones_like(video[:, 0:1, 0, 0, 0])  # [b,1]
@@ -188,16 +185,6 @@ class RolloutManager:
                     )
                     frame_1 = frame_1 - ts_1 * vid_pred
                     ts_1 = ts_1 - ts_1 # -> 0
-
-                    print(torch.is_grad_enabled())
-                    # Print requires grad on model parameters
-                    for n, p in model.named_parameters():
-                        print(n, p.requires_grad)
-                    
-                    print("frame_1", frame_1.requires_grad)
-                    print("vid_pred", vid_pred.requires_grad)
-                    exit()
-                    backward_and_check(model, vid_pred)
                     break
                 else:
                     with torch.no_grad():
@@ -225,7 +212,7 @@ class RolloutManager:
 
             video = torch.cat([video, frame_1], dim=1)            
 
-        model.module.transformer.disable_decoding()
+        get_module().transformer.disable_decoding()
 
         # Only return fixed window of generated frames and grad mask
         video = video[:, -window_length:]
