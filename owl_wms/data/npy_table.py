@@ -55,7 +55,9 @@ class NpyTable:
         for key, val in row.items():
             if key in self.array_columns:
                 path = self.directory / f"{key}_{idx}.npy"
-                np.save(path, val)
+                arr = np.asarray(val, order="C")
+                with open(path, "wb", buffering=8 << 20) as f:  # 8 MiB buffer
+                    np.save(f, arr, allow_pickle=False)
                 entry[key] = f"{key}_{idx}.npy"
             else:
                 entry[key] = val
