@@ -3,6 +3,7 @@ from pathlib import Path
 import tqdm
 import wandb
 import gc
+import re
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -15,7 +16,7 @@ from ..schedulers import get_scheduler_cls
 from ..models import get_model_cls
 from ..sampling import get_sampler_cls
 from ..data import get_loader
-from ..utils.logging import LogHelper, to_wandb_av
+from ..utils.logging import LogHelper, to_wandb_samples
 from ..utils import batch_permute_to_length
 from ..muon import init_muon
 from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn
@@ -36,7 +37,7 @@ class RFTTrainer(BaseTrainer):
         super().__init__(*args, **kwargs)
 
         model_id = self.model_cfg.model_id
-        self.model = get_model_cls(model_id)(self.model_cfg)
+        self.model = get_model_cls(model_id)(self.model_cfg).train()
 
         # Print model size
         if self.rank == 0:
@@ -56,10 +57,17 @@ class RFTTrainer(BaseTrainer):
 
         freeze(self.decoder)
 
+    @staticmethod
+    def get_raw_model(model):
+        return getattr(model, "module", model)
+
     def save(self):
+        if self.rank != 0:
+            return
+
         save_dict = {
-            'model': self.model.state_dict(),
-            'ema': self.ema.state_dict(),
+            'model': self.get_raw_model(self.model).state_dict(),
+            'ema': self.get_raw_model(self.ema).state_dict(),
             'opt': self.opt.state_dict(),
             'steps': self.total_step_counter
         }
@@ -67,51 +75,70 @@ class RFTTrainer(BaseTrainer):
             save_dict['scheduler'] = self.scheduler.state_dict()
         super().save(save_dict)
 
-    def load(self):
-        if hasattr(self.train_cfg, 'resume_ckpt') and self.train_cfg.resume_ckpt is not None:
-            save_dict = super().load(self.train_cfg.resume_ckpt)
-            has_ckpt = True
-        else:
-            print("Failed to load checkpoint")
-            return
+    def load(self) -> None:
+        """Build runtime objects and optionally restore a checkpoint."""
+        # ----- model & helpers -----
+        ckpt = getattr(self.train_cfg, "resume_ckpt", None)
+        state = None
+        if ckpt:
+            state = super().load(ckpt)
 
-        self.model.load_state_dict(save_dict['model'])
-        self.ema.load_state_dict(save_dict['ema'])
-        self.opt.load_state_dict(save_dict['opt'])
-        if self.scheduler is not None and 'scheduler' in save_dict:
-            self.scheduler.load_state_dict(save_dict['scheduler'])
-        self.total_step_counter = save_dict['steps']
+            # Allow legacy checkpoints: strip module and _orig_mod
+            pat = r'^(?:(?:_orig_mod\.|module\.)+)?([^.]+\.)?(?:(?:_orig_mod\.|module\.)+)?'
+            state["model"] = {re.sub(pat, r'\1', k): v for k, v in state["model"].items()}
+            state["ema"] = {re.sub(pat, r'\1', k): v for k, v in state["ema"].items()}
 
-    def train(self):
-        torch.cuda.set_device(self.local_rank)
-        print(f"Device used: rank={self.rank}")
+            self.model.load_state_dict(state["model"], strict=True)
+            self.total_step_counter = state.get("steps", 0)
 
-        # Prepare model and ema
-        self.model = self.model.cuda().train()
-
+        self.model = self.model.cuda()
         if self.world_size > 1:
             self.model = DDP(self.model, device_ids=[self.local_rank])
+        else:
+            self.model = self.model
         self.model = torch.compile(self.model)
 
         self.decoder = self.decoder.cuda().eval().bfloat16()
-        decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
+        self.decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
 
-        self.ema = EMA(
-            self.model,
-            beta=0.999,
-            update_after_step=0,
-            update_every=1
-        )
-        #torch.compile(self.ema.ema_model.module.core if self.world_size > 1 else self.ema.ema_model.core, dynamic=False, fullgraph=True)
+        # ----- EMA, optimiser, scheduler -----
+        self.ema = EMA(self.model, beta=0.999, update_after_step=0, update_every=1)
 
-        # Set up optimizer and scheduler
         if self.train_cfg.opt.lower() == "muon":
             self.opt = init_muon(self.model, rank=self.rank, world_size=self.world_size, **self.train_cfg.opt_kwargs)
         else:
             self.opt = getattr(torch.optim, self.train_cfg.opt)(self.model.parameters(), **self.train_cfg.opt_kwargs)
 
-        if self.train_cfg.scheduler is not None:
-            self.scheduler = get_scheduler_cls(self.train_cfg.scheduler)(self.opt, **self.train_cfg.scheduler_kwargs)
+        if self.train_cfg.scheduler:
+            sched_cls = get_scheduler_cls(self.train_cfg.scheduler)
+            self.scheduler = sched_cls(self.opt, **self.train_cfg.scheduler_kwargs)
+
+        # ----- optional checkpoint restore -----
+        if ckpt:
+            self.ema.load_state_dict(state["ema"])
+            self.opt.load_state_dict(state["opt"])
+            if self.scheduler and "scheduler" in state:
+                self.scheduler.load_state_dict(state["scheduler"])
+
+        del state
+
+    @torch.no_grad()
+    def update_buffer(self, name: str, value: torch.Tensor, value_ema: torch.Tensor | None = None):
+        """Set the buffer `name` (e.g. 'core.transformer.foo') across ranks and EMA."""
+        online = self.model.module if isinstance(self.model, DDP) else self.model
+        buf_online = online.get_buffer(name)
+        buf_ema = self.ema.ema_model.get_buffer(name)
+
+        if self.rank == 0:
+            buf_online.copy_(value.to(buf_online))
+        if self.world_size > 1:
+            dist.broadcast(buf_online, 0)
+
+        buf_ema.copy_(buf_online)
+
+    def train(self):
+        torch.cuda.set_device(self.local_rank)
+        print(f"Device used: rank={self.rank}")
 
         # Grad accum setup and scaler
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
@@ -176,8 +203,6 @@ class RFTTrainer(BaseTrainer):
                         self.scheduler.step()
                     self.ema.update()
 
-                    del loss
-
                     # Do logging
                     with torch.no_grad():
                         wandb_dict = metrics.pop()
@@ -187,7 +212,7 @@ class RFTTrainer(BaseTrainer):
                         # Sampling commented out for now
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx:
-                                eval_wandb_dict = self.eval_step(sample_loader, sampler, decode_fn)
+                                eval_wandb_dict = self.eval_step(sample_loader, sampler)
                                 gc.collect()
                                 torch.cuda.empty_cache()
                                 if self.rank == 0:
@@ -198,76 +223,49 @@ class RFTTrainer(BaseTrainer):
 
                     self.total_step_counter += 1
                     if self.total_step_counter % self.train_cfg.save_interval == 0:
-                        if self.rank == 0:
-                            self.save()
+                        self.save()
 
                     self.barrier()
 
-    def eval_step(self, sample_loader, sampler, decode_fn=None):
+    def _gather_concat_cpu(self, t: torch.Tensor, dim: int = 0):
+        """Gather *t* from every rank onto rank 0 and return concatenated copy."""
+        if self.world_size == 1:
+            return t.cpu()
+        if self.rank == 0:
+            parts = [t.cpu()]
+            scratch = torch.empty_like(t)
+            for src in range(1, self.world_size):
+                dist.recv(scratch, src=src)
+                parts.append(scratch.cpu())
+            return torch.cat(parts, dim=dim)
+        dist.send(t, dst=0)
+
+    def eval_step(self, sample_loader, sampler):
         ema_model = self.get_module(ema=True).core
-        ema_model.eval()
 
-        # ---- Generation Run ----
-        vid_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-
-        mouse, button = mouse_for_sample.bfloat16().cuda(), btn_for_sample.bfloat16().cuda()
-        mouse, button = batch_permute_to_length(mouse, button, sampler.num_frames + vid_for_sample.size(1))
-        vid = vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale
+        # ---- Generate Samples ----
+        vid, mouse, btn = [x.cuda() for x in next(sample_loader)]
+        mouse, button = batch_permute_to_length(mouse, btn, sampler.num_frames + vid.size(1))
+        vid = vid / self.train_cfg.vae_scale
 
         latent_vid = sampler(ema_model, vid, mouse, button)
 
         if self.sampler_only_return_generated:
-            latent_vid = latent_vid[:, vid_for_sample.size(1):]
-            mouse = mouse[:, vid_for_sample.size(1):]
-            button = button[:, vid_for_sample.size(1):]
+            latent_vid, mouse, button = (x[:, vid.size(1):] for x in (latent_vid, mouse, button))
 
-        video_out = decode_fn(latent_vid * self.train_cfg.vae_scale,) if decode_fn is not None else None
+        video_out = self.decode_fn(latent_vid * self.train_cfg.vae_scale) if self.decode_fn is not None else None
 
-        del vid_for_sample, mouse_for_sample, btn_for_sample
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        def gather_concat_cpu(t, dim=0):
-            if self.rank == 0:
-                parts = [t.cpu()]
-                scratch = torch.empty_like(t)
-                for src in range(self.world_size):
-                    if src == 0:
-                        continue
-                    dist.recv(scratch, src=src)
-                    parts.append(scratch.cpu())
-                return torch.cat(parts, dim=dim)
-            else:
-                dist.send(t, dst=0)
-                return None
-
-        # ---- Save Latent Artifacts ----
+        # ---- Optionally Save Latent Artifacts ----
         if getattr(self.train_cfg, "eval_sample_dir", None):
-            latent_vid = gather_concat_cpu(latent_vid)
+            latent_vid = self._gather_concat_cpu(latent_vid)
             if self.rank == 0:
                 eval_dir = Path(self.train_cfg.eval_sample_dir)
                 eval_dir.mkdir(parents=True, exist_ok=True)
                 torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
 
         # ---- Generate Media Artifacts ----
-        video_out, mouse, button = [
-            gather_concat_cpu(x, dim=0) for x in [video_out, mouse, button]
-        ]
-
-        if self.rank == 0:
-            wandb_av_out = to_wandb_av(video_out, None, mouse, button)
-            if len(wandb_av_out) == 3:
-                video, depth_gif, flow_gif = wandb_av_out
-                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif, flow_gif=flow_gif)
-            elif len(wandb_av_out) == 2:
-                video, depth_gif = wandb_av_out
-                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif)
-            else:
-                eval_wandb_dict = dict(samples=wandb_av_out)
-        else:
-            eval_wandb_dict = None
+        video_out, mouse, button = map(self._gather_concat_cpu, (video_out, mouse, button))
+        eval_wandb_dict = to_wandb_samples(video_out, mouse, button) if self.rank == 0 else None
         dist.barrier()
-
-        ema_model.train()  # unnecessary? ema model isn't trained?
 
         return eval_wandb_dict
