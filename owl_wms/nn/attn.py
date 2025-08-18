@@ -2,7 +2,7 @@ import torch
 import einops
 from torch import nn
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
-
+import torch.nn.functional as F
 from .normalization import rms_norm
 from .mlp import MLP
 
@@ -91,12 +91,12 @@ class Attn(nn.Module):
         # prepend cached values
         if offset > 0:
             old_k, old_v = kv_cache.get(self.layer_idx)
-            k = torch.cat([old_k, k], dim=2)
-            v = torch.cat([old_v, v], dim=2)
+            k = torch.cat([old_k.clone().detach(), k], dim=2)
+            v = torch.cat([old_v.clone().detach(), v], dim=2)
 
         # update cache
         if kv_cache is not None and kv_cache.should_update:
-            kv_cache.update(k.clone(), v.clone(), self.layer_idx)
+            kv_cache.update(k.detach().clone(), v.detach().clone(), self.layer_idx)
 
         # NOTE: Using block_mask = None to mark decoding, probably need something more explicit in future
         if self.local and block_mask is None:
@@ -148,7 +148,9 @@ class DiT(nn.Module):
         super().__init__()
         self.config = config
 
-        self.local_layers = [(layer_idx % 4 != 0) for layer_idx in range(config.n_layers)]
+        if not hasattr(config, "local_idx"):
+            config.local_idx = 4
+        self.local_layers = [(layer_idx % config.local_idx != 0) for layer_idx in range(config.n_layers)]
         self.blocks = nn.ModuleList([DiTBlock(config, idx, local) for idx, local in enumerate(self.local_layers)])
         self.decoding = False
 
