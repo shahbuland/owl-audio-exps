@@ -26,6 +26,8 @@ from pathlib import Path
 import wandb
 import contextvars
 
+torch.autograd.set_detect_anomaly(True)
+
 def backward_and_check(model, tensor):
     tensor.mean().backward()
     total = 0
@@ -184,7 +186,7 @@ class RolloutManager:
                         kv_cache=kv_cache
                     )
                     frame_1 = frame_1 - ts_1 * vid_pred
-                    ts_1 = ts_1 - ts_1 # -> 0
+                    ts_1 = torch.zeros_like(ts_1) # -> 0
                     break
                 else:
                     with torch.no_grad():
@@ -196,7 +198,7 @@ class RolloutManager:
                             kv_cache=kv_cache
                         )
                         frame_1 = frame_1 - dt * vid_pred
-                        ts_1 = ts_1 - dt
+                        ts_1 = ts_1.clone() - dt
 
             with torch.no_grad():
                 kv_cache.enable_cache_updates()

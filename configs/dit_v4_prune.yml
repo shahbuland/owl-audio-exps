@@ -3,7 +3,7 @@ model:
   sample_size: 8
   channels: 128
 
-  n_layers: 12
+  n_layers: 8
   n_heads: 24
   d_model: 1536
 
@@ -13,6 +13,7 @@ model:
 
   cfg_prob: 0.0
   n_frames: 1536
+  local_idx: 2
 
   causal: true
   uncond: false
@@ -43,17 +44,15 @@ train:
 
   epochs: 10000
 
-  opt: AdamW
+  opt: Muon
   opt_kwargs:
-    lr: 2.0e-6
-    betas: [0.9, 0.999]
-    weight_decay: 0.01
-    eps: 1.0e-8
-  d_opt_kwargs:
-    lr: 2.0e-6
-    betas: [0.9, 0.999]
-    weight_decay: 0.01
-    eps: 1.0e-8
+    lr: 1.0e-3
+    momentum: 0.95
+    adamw_lr: 1.0e-4
+    adamw_wd: 1.0e-4
+    adamw_eps: 1.0e-15
+    adamw_betas: [0.9, 0.95]
+    adamw_keys: [proj_in, proj_out.proj, t_embed, control_embed, gate, adaln]
     
 
   scheduler: null
@@ -88,7 +87,7 @@ train:
   vae_ckpt_path: /mnt/data/checkpoints/owl_vaes/cod_yt_v2/cod_yt_v2_515k_ema_decoder.pt
 
   rollout_steps: 16
-  subsample: 0.15
+  subsample: 0.25
   cfg_scale: 1.5
   gen_p: 0.25
 
