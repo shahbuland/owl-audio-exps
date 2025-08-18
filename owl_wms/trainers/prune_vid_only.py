@@ -270,12 +270,12 @@ class DistillODETrainer(BaseTrainer):
             alpha = 0.2
             gen_mask = torch.rand(vid.shape[0], vid.shape[1], device=vid.device, dtype=vid.dtype) < gen_p
             noisy_video = torch.where(
-                gen_mask,
+                gen_mask[:,:,None,None,None],
                 torch.randn_like(vid),
                 zlerp(vid, alpha)
             )
             ts = torch.where(
-                gen_mask,
+                gen_mask[:,:,None,None,None],
                 torch.ones_like(vid[:,:,0,0,0]),
                 torch.ones_like(vid[:,:,0,0,0]) * alpha
             )
@@ -307,7 +307,7 @@ class DistillODETrainer(BaseTrainer):
                 gen_masks.append(gen_mask.clone()) # b n
 
                 noisy_video = torch.where(
-                    gen_mask,
+                    gen_mask[:,:,None,None,None],
                     noisy_video - dt * pred_video,
                     noisy_video
                 )
