@@ -20,7 +20,7 @@ def get_deltas(custom_schedule):
 
     return deltas
 
-class AVCachingSampleV2:
+class AVCachingSamplerV2:
     """
     Parameters
     ----------
