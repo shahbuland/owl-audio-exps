@@ -12,30 +12,34 @@ model:
   n_mouse_axes: 2
 
   cfg_prob: 0.1
-  n_frames: 1000
+  n_frames: 1000  # 1536
 
   causal: true
   uncond: false
   backbone: dit
   has_audio: false
+  rope_impl: motion
+  rope_ats_delta: 2.0
 
   local_window: 16
-  global_window: 256
+  global_window: 256  # null  # full window
 
 train:
   trainer_id: rft
-  data_id: cod
+  data_id: sequence_packing
   data_kwargs:
-    window_length: 1000
+    window_length: 1000  # 1536
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train
+    batch_columns: ["video", "mouse", "buttons"]
 
   sample_data_id: cod
   sample_data_kwargs:
     window_length: 16  # size of single ground truth start tokens
     dataset_path: /mnt/data/lapp0/cod-data-latent-360x640to4x4/feats/labelled/train
+    batch_columns: ["video", "mouse", "buttons"]
 
-  target_batch_size: 8  # 512
-  batch_size: 1  # 64 is possible
+  target_batch_size: 8
+  batch_size: 1
 
   epochs: 10000
 
@@ -57,8 +61,8 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/video_dit_v2
-  output_path: /mnt/data/owl-wms/checkpoints/video_dit_v2
+  checkpoint_dir: checkpoints/video_dit_v3
+  output_path: /mnt/data/owl-wms/checkpoints/dit_v3
   resume_ckpt: null
 
   sample_interval: 5000
@@ -86,4 +90,4 @@ train:
 wandb:
   name: louiscastricato  # lapp0-andrew-lapp
   project: video_models  # owl
-  run_name: video_dit_v2
+  run_name: video_dit_v3

@@ -46,7 +46,7 @@ class BaseTrainer:
         if self.world_size > 1:
             dist.barrier()
 
-    def get_module(self, ema = False):
+    def get_module(self, ema=False):
         if self.world_size == 1:
             if ema:
                 return self.ema.ema_model
