@@ -245,7 +245,17 @@ class RFTTrainer(BaseTrainer):
 
         # ---- Generate Samples ----
         vid, mouse, btn = [x.cuda() for x in next(sample_loader)]
-        mouse, button = batch_permute_to_length(mouse, btn, sampler.num_frames + vid.size(1))
+        mouses = [mouse]
+        btns = [btn]
+        for _ in range(15):
+            _, new_mouse, new_btn = [x.cuda() for x in next(sample_loader)]
+            mouses.append(new_mouse)
+            btns.append(new_btn)
+        mouses = torch.cat(mouses, dim=0)
+        btns = torch.cat(btns, dim=0)
+        mouse, button = batch_permute_to_length(mouses, btns, sampler.num_frames + vid.size(1))
+        mouse = mouse[:vid.size(0)]
+        button = button[:vid.size(0)]
         vid = vid / self.train_cfg.vae_scale
 
         latent_vid = sampler(ema_model, vid, mouse, button)
