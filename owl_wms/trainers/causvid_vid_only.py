@@ -417,6 +417,9 @@ class CausVidTrainer(BaseTrainer):
             self.student = DDP(self.student, find_unused_parameters=True)
             self.critic = DDP(self.critic, find_unused_parameters=True)
 
+        self.critic.module = torch.compile(self.critic.module)
+        self.teacher = torch.compile(self.teacher)
+
         # Ema model
         self.ema = EMA(
             self.student,
@@ -532,6 +535,9 @@ class CausVidTrainer(BaseTrainer):
                 wandb_dict = metrics.pop()
                 wandb_dict['time'] = timer.hit()
                 timer.reset()
+
+                gc.collect()
+                torch.cuda.empty_cache()
 
                 # Sampling
                 if self.total_step_counter % self.train_cfg.sample_interval == 0:

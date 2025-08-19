@@ -91,12 +91,12 @@ class Attn(nn.Module):
         # prepend cached values
         if offset > 0:
             old_k, old_v = kv_cache.get(self.layer_idx)
-            k = torch.cat([old_k.clone(), k], dim=2)
-            v = torch.cat([old_v.clone(), v], dim=2)
+            k = torch.cat([old_k, k], dim=2)
+            v = torch.cat([old_v, v], dim=2)
 
         # update cache
         if kv_cache is not None and kv_cache.should_update:
-            kv_cache.update(k.clone(), v.clone(), self.layer_idx)
+            kv_cache.update(k, v, self.layer_idx)
 
         # NOTE: Using block_mask = None to mark decoding, probably need something more explicit in future
         if self.local and block_mask is None:
