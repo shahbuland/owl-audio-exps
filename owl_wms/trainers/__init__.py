@@ -1,10 +1,10 @@
 def get_trainer_cls(trainer_id):
-    if trainer_id == "causvid":
-        """
-        CausvidTrainer does DMD to create few-step causal student
-        """
-        from .causvid_v2 import CausVidTrainer
+    if trainer_id == "causvid_vid":
+        from .causvid_vid_only import CausVidTrainer
         return CausVidTrainer
+    if trainer_id == "sforce_vid":
+        from .sf_vid_only import SelfForceTrainer
+        return SelfForceTrainer
     if trainer_id == "av":
         """
         Most basic trainer. Does audio + video training.
@@ -23,15 +23,9 @@ def get_trainer_cls(trainer_id):
         """
         from .mixed_av_trainer import MixedAVRFTTrainer
         return MixedAVRFTTrainer
-    if trainer_id == "sforce":
+    if trainer_id == "ode_distill_vid":
         """
-        Self force trainer does clean context + DMD to enable few step with KV caching (broken rn)
+        Prune video only trainer
         """
-        from .sf_trainer_v2 import SelfForceTrainer
-        return SelfForceTrainer
-    if trainer_id == "ode_distill":
-        """
-        ODE regression matches student trajectories to teacher trajectories
-        """
-        from .ode_regression import DistillODETrainer
+        from .prune_vid_only import DistillODETrainer
         return DistillODETrainer

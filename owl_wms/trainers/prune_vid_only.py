@@ -8,20 +8,58 @@ import torch.nn.functional as F
 import einops as eo
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+import gc
+import random
 import wandb
 from ema_pytorch import EMA
 
+from ..nn.rope import cast_rope_buffers_to_fp32
 from ..data import get_loader
 from ..models import get_model_cls
 from ..muon import init_muon
 from ..utils import Timer, freeze, unfreeze, versatile_load
+from ..utils import batch_permute_to_length
 from ..utils.logging import LogHelper, to_wandb, to_wandb_av
 from .base import BaseTrainer
 from ..configs import Config
 from ..sampling import get_sampler_cls
 from ..sampling.schedulers import get_sd3_euler
-from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn, make_batched_audio_decode_fn
+from ..utils.owl_vae_bridge import get_decoder_only, make_batched_decode_fn
+
+class SoftResetIterator:
+    """
+    Wraps an iterable (e.g., DataLoader) so that when exhausted,
+    it automatically resets and continues yielding items.
+    """
+    def __init__(self, iterable):
+        self._iterable = iterable
+        self._reset_iter()
+
+    def _reset_iter(self):
+        self._iterator = iter(self._iterable)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            self._reset_iter()
+            return next(self._iterator)
+
+def zlerp(x, t):
+    z = torch.randn_like(x)
+    return x * (1. - t) + z * t
+
+def zlerp_batched(x, t):
+    z = torch.randn_like(x)
+    t = t[:,:,None,None,None]
+    return x * (1. - t) + z * t
+
+def lerp_batched(x, z, t):
+    t = t[:,:,None,None,None]
+    return x * (1. - t) + z * t
 
 class DistillODETrainer(BaseTrainer):
     """
@@ -43,7 +81,9 @@ class DistillODETrainer(BaseTrainer):
         teacher_cfg = Config.from_yaml(teacher_cfg_path).model
         teacher = get_model_cls(teacher_cfg.model_id)(teacher_cfg)
         teacher.load_state_dict(teacher_ckpt)
-        self.teacher = teacher.core.to(self.device).bfloat16().eval()
+        self.teacher = teacher.core.to(self.device).bfloat16()
+
+        cast_rope_buffers_to_fp32(self.teacher)
     
         # Instantiate student
         student_cfg = self.model_cfg
@@ -67,16 +107,8 @@ class DistillODETrainer(BaseTrainer):
             self.train_cfg.vae_ckpt_path
         )
 
-        self.audio_decoder = get_decoder_only(
-            self.train_cfg.audio_vae_id,
-            self.train_cfg.audio_vae_cfg_path,
-            self.train_cfg.audio_vae_ckpt_path
-        )
-
         freeze(self.decoder)
-        freeze(self.audio_decoder)
         self.decoder = self.decoder.bfloat16().to(self.device).eval()
-        self.audio_decoder = self.audio_decoder.bfloat16().to(self.device).eval()
 
     def load_teacher_into_student(self, student_model, teacher_state_dict, teacher_cfg, student_cfg):
         """
@@ -201,12 +233,14 @@ class DistillODETrainer(BaseTrainer):
         self.accum_steps = max(1, self.accum_steps)
 
         decode_fn = make_batched_decode_fn(self.decoder, self.train_cfg.vae_batch_size)
-        audio_decode_fn = make_batched_audio_decode_fn(self.audio_decoder, self.train_cfg.vae_batch_size)
 
         # Dataset setup
         loader = get_loader(self.train_cfg.data_id, self.train_cfg.batch_size, **self.train_cfg.data_kwargs)
+        loader = SoftResetIterator(loader)
+
         sample_loader = get_loader(self.train_cfg.sample_data_id, self.train_cfg.n_samples, **self.train_cfg.sample_data_kwargs)
-        sample_loader = iter(sample_loader)
+        sample_loader = SoftResetIterator(sample_loader)
+        
         sampler = get_sampler_cls(self.train_cfg.sampler_id)(**self.train_cfg.sampler_kwargs)
 
         # Timer and logging
@@ -224,98 +258,103 @@ class DistillODETrainer(BaseTrainer):
             self.model_cfg.sample_size,
             self.model_cfg.sample_size,
         )
-        input_shape_audio = (
-            self.model_cfg.audio_channels,
-        )
 
         def get_dummy(z):
-            return (
-                torch.randn(z.shape[0],z.shape[1],*input_shape, device=z.device, dtype=z.dtype),
-                torch.randn(z.shape[0],z.shape[1], *input_shape_audio, device=z.device, dtype=z.dtype)
-            )
+            return torch.randn(z.shape[0],z.shape[1],*input_shape, device=z.device, dtype=z.dtype)
 
         @torch.no_grad()
-        def sample_with_teacher(mouse, btn, n_steps=20, subsample=1.0):
+        def sample_with_teacher(vid, mouse, btn, n_steps=self.train_cfg.rollout_steps, subsample=self.train_cfg.subsample, gen_p=self.train_cfg.gen_p):
             """
-            Sample using teacher 
+            Sample using teacher (video only, no cond/uncond mask, just zeros_like controls)
             """
-            noisy_video, noisy_audio = get_dummy(mouse)
+            alpha = 0.2
+            gen_mask = torch.rand(vid.shape[0], vid.shape[1], device=vid.device, dtype=vid.dtype) < gen_p
+            noisy_video = torch.where(
+                gen_mask[:,:,None,None,None],
+                torch.randn_like(vid),
+                zlerp(vid, alpha)
+            )
+            ts = torch.where(
+                gen_mask[:,:,None,None,None],
+                torch.ones_like(vid[:,:,0,0,0]),
+                torch.ones_like(vid[:,:,0,0,0]) * alpha
+            )
 
             dt_list = get_sd3_euler(n_steps)
-            t = torch.ones(mouse.shape[0],mouse.shape[1], device = mouse.device, dtype = mouse.dtype)
+            t = torch.ones(mouse.shape[0], mouse.shape[1], device=mouse.device, dtype=mouse.dtype)
 
             video_inputs = []
-            audio_inputs = []
             mouse_inputs = []
             btn_inputs = []
             ts = []
             video_outputs = []
-            audio_outputs = []
+            gen_masks = []
 
-            cond_mask = torch.ones(mouse.shape[0], device = mouse.device, dtype = torch.bool)
-            uncond_mask = torch.zeros_like(cond_mask)
+            zero_mouse = torch.zeros_like(mouse)
+            zero_btn = torch.zeros_like(btn)
 
             for dt in dt_list:
-                pred_video_uncond, pred_audio_uncond = self.teacher(noisy_video, noisy_audio, t, mouse, btn, has_controls=uncond_mask)
-                pred_video_cond, pred_audio_cond = self.teacher(noisy_video, noisy_audio, t, mouse, btn, has_controls=cond_mask)
+                pred_video_uncond = self.teacher(noisy_video, t, zero_mouse, zero_btn)
+                pred_video_cond = self.teacher(noisy_video, t, mouse, btn)
 
                 pred_video = pred_video_uncond + self.cfg_scale * (pred_video_cond - pred_video_uncond)
-                pred_audio = pred_audio_uncond + self.cfg_scale * (pred_audio_cond - pred_audio_uncond)
 
-                video_inputs.append(noisy_video.clone())
-                audio_inputs.append(noisy_audio.clone())
-                video_outputs.append(pred_video.clone())
-                audio_outputs.append(pred_audio.clone())
+                video_inputs.append(noisy_video.clone()) # b n c h w
+                video_outputs.append(pred_video.clone()) # b n c h w
                 mouse_inputs.append(mouse.clone())
                 btn_inputs.append(btn.clone())
-                ts.append(t.clone())
+                ts.append(t.clone()) # b n
+                gen_masks.append(gen_mask.clone()) # b n
 
-                noisy_video = noisy_video - dt * pred_video
-                noisy_audio = noisy_audio - dt * pred_audio
-                t = t - dt
-            
+                noisy_video = torch.where(
+                    gen_mask[:,:,None,None,None],
+                    noisy_video - dt * pred_video,
+                    noisy_video
+                )
+                t = torch.where(
+                    gen_mask,
+                    t - dt,
+                    t
+                )
+
             # Concatenate on batch dim
-            video_inputs = torch.cat(video_inputs, dim=0)
-            audio_inputs = torch.cat(audio_inputs, dim=0)
+            video_inputs = torch.cat(video_inputs, dim=0) # (steps b) n c h w
             video_outputs = torch.cat(video_outputs, dim=0)
-            audio_outputs = torch.cat(audio_outputs, dim=0)
             mouse_inputs = torch.cat(mouse_inputs, dim=0)
             btn_inputs = torch.cat(btn_inputs, dim=0)
-            ts = torch.cat(ts, dim=0)
+            ts = torch.cat(ts, dim=0) # (steps b) n 
+            gen_masks = torch.cat(gen_masks, dim=0) # (steps b) n
 
             if subsample < 1.0:
                 inds = torch.randperm(video_inputs.shape[0])[:int(video_inputs.shape[0] * subsample)]
                 video_inputs = video_inputs[inds]
-                audio_inputs = audio_inputs[inds]
                 video_outputs = video_outputs[inds]
-                audio_outputs = audio_outputs[inds]
                 mouse_inputs = mouse_inputs[inds]
                 btn_inputs = btn_inputs[inds]
                 ts = ts[inds]
+                gen_masks = gen_masks[inds]
 
-            return video_inputs, audio_inputs, video_outputs, audio_outputs, mouse_inputs, btn_inputs, ts
+            return video_inputs, video_outputs, mouse_inputs, btn_inputs, ts, gen_masks
 
-        for (batch_vid, batch_audio, batch_mouse, batch_btn) in loader:
+        for (batch_vid, batch_mouse, batch_btn) in loader:
             batch_vid = batch_vid.to(self.device).bfloat16() / self.train_cfg.vae_scale
-            batch_audio = batch_audio.to(self.device).bfloat16() / self.train_cfg.audio_vae_scale
             batch_mouse = batch_mouse.to(self.device).bfloat16()
             batch_btn = batch_btn.to(self.device).bfloat16()
             
             with self.ctx:
                 (
                     video_inputs,
-                    audio_inputs,
                     video_outputs,
-                    audio_outputs,
                     mouse_inputs,
                     btn_inputs,
-                    ts
-                ) = sample_with_teacher(batch_mouse, batch_btn, subsample=self.subsample)
+                    ts,
+                    gen_masks
+                ) = sample_with_teacher(batch_vid, batch_mouse, batch_btn)
 
-                preds_video, preds_audio = self.student(video_inputs, audio_inputs, ts, mouse_inputs, btn_inputs)
-                loss_video = F.mse_loss(preds_video, video_outputs) / self.accum_steps
-                loss_audio = F.mse_loss(preds_audio, audio_outputs) / self.accum_steps
-                loss = 0.5 * (loss_video + loss_audio)
+                preds_video = self.student(video_inputs, ts, mouse_inputs, btn_inputs)
+                gen_masks = gen_masks[:,:,None,None,None]
+                loss_video = F.mse_loss(preds_video * gen_masks, video_outputs * gen_masks) / self.accum_steps
+                loss = loss_video
 
             metrics.log('loss', loss)
             self.scaler.scale(loss).backward()
@@ -335,37 +374,19 @@ class DistillODETrainer(BaseTrainer):
                 with torch.no_grad():
                     wandb_dict = metrics.pop()
                     wandb_dict['time'] = timer.hit()
-                    wandb_dict['lr'] = self.opt.param_groups[0]['lr']
                     timer.reset()
 
-                    if self.total_step_counter % self.train_cfg.sample_interval == 0:
-                        with self.ctx:
-                            vid_for_sample, aud_for_sample, mouse_for_sample, btn_for_sample = next(sample_loader)
-                            n_samples = self.train_cfg.n_samples
-                            samples, audio, sample_mouse, sample_button = sampler(
-                                self.get_ema_core(),
-                                vid_for_sample.bfloat16().cuda() / self.train_cfg.vae_scale,
-                                aud_for_sample.bfloat16().cuda() / self.train_cfg.audio_vae_scale,
-                                mouse_for_sample.bfloat16().cuda(),
-                                btn_for_sample.bfloat16().cuda(),
-                                decode_fn,
-                                audio_decode_fn,
-                                self.train_cfg.vae_scale,
-                                self.train_cfg.audio_vae_scale
-                            ) # -> [b,n,c,h,w]
+                # Sampling
+                if self.total_step_counter % self.train_cfg.sample_interval == 0:
+                    with self.ctx:
+                        eval_wandb_dict = self.eval_step(sample_loader, sampler, decode_fn)
+                        gc.collect()
+                        torch.cuda.empty_cache()
                         if self.rank == 0:
-                            wandb_av_out = to_wandb_av(samples, audio, sample_mouse, sample_button)
-                            if len(wandb_av_out) == 3:  
-                                video, depth_gif, flow_gif = wandb_av_out
-                                wandb_dict['samples'] = video
-                                wandb_dict['depth_gif'] = depth_gif
-                                wandb_dict['flow_gif'] = flow_gif
-                            else:
-                                video = wandb_av_out
-                                wandb_dict['samples'] = video
+                            wandb_dict.update(eval_wandb_dict)
 
-                    if self.rank == 0:
-                        wandb.log(wandb_dict)
+                if self.rank == 0:
+                    wandb.log(wandb_dict)
 
                 self.total_step_counter += 1
                 if self.total_step_counter % self.train_cfg.save_interval == 0:
@@ -373,3 +394,95 @@ class DistillODETrainer(BaseTrainer):
                         self.save()
 
                 self.barrier()
+
+    @torch.no_grad()
+    def eval_step(self, sample_loader, sampler, decode_fn=None):
+        """
+        Evaluation step for ODE regression trainer.
+        Follows the pattern of sf_vid_only.py: sample a batch, sample controls, run model, decode, and log.
+        """
+        model = self.ema.ema_model.module if self.world_size > 1 else self.ema.ema_model
+        model = model.eval()
+
+        # Get a batch of data
+        vid, mouse, btn = next(sample_loader)
+        vid = vid / self.train_cfg.vae_scale
+
+        # Collect multiple mouse/btn for control sampling
+        mouses = [mouse]
+        btns = [btn]
+        for _ in range(15):
+            _, new_mouse, new_btn = next(sample_loader)
+            mouses.append(new_mouse)
+            btns.append(new_btn)
+
+        mouses = torch.cat(mouses, dim=0)
+        btns = torch.cat(btns, dim=0)
+
+        # Permute controls to match sample length
+        mouse, btn = batch_permute_to_length(
+            mouses, btns, sampler.num_frames + vid.size(1)
+        )
+        mouse = mouse[:vid.size(0)]
+        btn = btn[:vid.size(0)]
+
+        # Run the sampler (should output latent video)
+        latent_vid = sampler(model, vid.cuda(), mouse.cuda(), btn.cuda())
+
+        # Remove context frames if needed
+        if True:
+            latent_vid = latent_vid[:, vid.size(1):]
+            mouse = mouse[:, vid.size(1):]
+            btn = btn[:, vid.size(1):]
+
+        # Decode video if decode_fn is provided
+        video_out = decode_fn(latent_vid * self.train_cfg.vae_scale) if decode_fn is not None else None
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        def gather_concat_cpu(t, dim=0):
+            if self.rank == 0:
+                t_gpu = t.cuda() if t.device.type == 'cpu' else t
+                parts = [t_gpu.cpu()]
+                scratch = torch.empty_like(t_gpu)
+                for src in range(self.world_size):
+                    if src == 0:
+                        continue
+                    dist.recv(scratch, src=src)
+                    parts.append(scratch.cpu())
+                return torch.cat(parts, dim=dim)
+            else:
+                t_gpu = t.cuda() if t.device.type == 'cpu' else t
+                dist.send(t_gpu, dst=0)
+                return None
+
+        # Save latent samples if requested
+        if getattr(self.train_cfg, "eval_sample_dir", None):
+            latent_vid = gather_concat_cpu(latent_vid)
+            if self.rank == 0:
+                eval_dir = Path(self.train_cfg.eval_sample_dir)
+                eval_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(latent_vid, eval_dir / f"vid.{self.total_step_counter}.pt")
+
+        # Gather outputs for logging
+        video_out, mouse, btn = [
+            gather_concat_cpu(x, dim=0) for x in [video_out, mouse, btn]
+        ]
+
+        if self.rank == 0:
+            wandb_av_out = to_wandb_av(video_out, None, mouse, btn)
+            if len(wandb_av_out) == 3:
+                video, depth_gif, flow_gif = wandb_av_out
+                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif, flow_gif=flow_gif)
+            elif len(wandb_av_out) == 2:
+                video, depth_gif = wandb_av_out
+                eval_wandb_dict = dict(samples=video, depth_gif=depth_gif)
+            else:
+                eval_wandb_dict = dict(samples=wandb_av_out)
+        else:
+            eval_wandb_dict = None
+
+        self.barrier()
+        model = model.train()
+        return eval_wandb_dict

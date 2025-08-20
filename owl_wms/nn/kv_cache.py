@@ -20,7 +20,7 @@ class SingleKVCache:
         self.should_update = False
 
         self.noise_caches = 0.0
-        self.offset = 0
+        self.offsets = [0] * self.config.n_layers
 
     def enable_cache_updates(self):
         self.should_update = True
@@ -37,9 +37,8 @@ class SingleKVCache:
         shape = (batch_size, self.config.n_heads, 0, self.config.d_model//self.config.n_heads)
         dummy = torch.empty(*shape, device = self.device, dtype = self.dtype)
         self.cache = [(torch.empty_like(dummy), torch.empty_like(dummy)) for _ in range(self.config.n_layers)]
-        self.offset = 0
+        self.offsets = [0] * self.config.n_layers
 
-    @torch.no_grad()
     def get(self, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
         k,v = self.cache[layer_ind]
@@ -48,13 +47,16 @@ class SingleKVCache:
             v = v + torch.randn_like(v) * self.noise_caches
         return k,v
 
-    @torch.no_grad()
     def update(self, new_k, new_v, layer_ind):
         assert self.cache is not None, "Must reset cache before using"
 
+        old_len = self.length_at(layer_ind)
+        new_len = new_k.shape[2]
+        delta_len = new_len - old_len
+        self.offsets[layer_ind] += delta_len
+
         self.cache[layer_ind] = (new_k,new_v)
 
-    @torch.no_grad()
     def truncate(self, truncate_amt, front = False):
         """
         Truncate/eject frames from the KV cache
@@ -71,12 +73,12 @@ class SingleKVCache:
 
         for i in range(self.config.n_layers):
             self.cache[i] = tuple_truncate(*self.cache[i])
-        if not front:
-            # When ejecting first frame, window slides forward, offset increases
-            self.offset += truncate_amt // self.config.tokens_per_frame
 
     def length_at(self, idx):
         return self.cache[idx][0].shape[2]
+    
+    def get_offset(self, idx=0):
+        return self.offsets[idx]
 
     def __len__(self):
         assert self.cache is not None, "Must reset cache before using"
@@ -85,6 +87,17 @@ class SingleKVCache:
     def n_frames(self):
         assert len(self) % self.config.tokens_per_frame == 0
         return len(self) // self.config.tokens_per_frame
+    
+    def clone(self):
+        # Clones all tensors for max-autotune to work properly
+        for i in range(self.config.n_layers):
+            self.cache[i] = (self.cache[i][0].clone(), self.cache[i][1].clone())
+        return self
+    
+    def detach(self):
+        for i in range(self.config.n_layers):
+            self.cache[i] = (self.cache[i][0].detach(), self.cache[i][1].detach())
+        return self
 
     @property
     def shape(self):

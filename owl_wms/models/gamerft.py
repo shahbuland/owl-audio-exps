@@ -30,7 +30,7 @@ class GameRFTCore(nn.Module):
 
         self.uncond = config.uncond
 
-    def forward(self, x, t, mouse, btn, doc_id=None, has_controls=None, kv_cache=None):
+    def forward(self, x, t, mouse, btn, doc_id=None, has_controls=None, kv_cache=None, local_block_mask=None, global_block_mask=None):
         """
         x: [b,n,c,h,w]
         t: [b,n]
@@ -52,7 +52,7 @@ class GameRFTCore(nn.Module):
         x = eo.rearrange(x, 'b n c h w -> b (n h w) c')
 
         x = self.proj_in(x)
-        x = self.transformer(x, cond, doc_id, kv_cache)
+        x = self.transformer(x, cond, doc_id, kv_cache, local_block_mask, global_block_mask)
         x = self.proj_out(x, cond)
 
         x = eo.rearrange(x, 'b (n h w) c -> b n c h w', h=h, w=w)

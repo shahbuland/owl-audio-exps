@@ -19,17 +19,22 @@ class Timer:
         return time.time() - self.start_time
 
 def versatile_load(path):
-    ckpt = torch.load(path, map_location = 'cpu', weights_only=False)
+    ckpt = torch.load(path, map_location='cpu', weights_only=False)
     if not 'ema' in ckpt and not 'model' in ckpt:
         return ckpt
     elif 'ema' in ckpt:
         ckpt = ckpt['ema']
         key_list = list(ckpt.keys())
         ddp_ckpt = False
+        orig_mod_ckpt = False
         for key in key_list:
-            if key.startswith("ema_model.module."):
+            if key.startswith("ema_model._orig_mod.module."):
+                orig_mod_ckpt = True
+            elif key.startswith("ema_model.module."):
                 ddp_ckpt = True
-        if ddp_ckpt:
+        if orig_mod_ckpt:
+            prefix = 'ema_model._orig_mod.module.'
+        elif ddp_ckpt:
             prefix = 'ema_model.module.'
         else:
             prefix = 'ema_model.'
@@ -37,19 +42,23 @@ def versatile_load(path):
         ckpt = ckpt['model']
         key_list = list(ckpt.keys())
         ddp_ckpt = False
+        orig_mod_ckpt = False
         for key in key_list:
-            if key.startswith("module."):
+            if key.startswith("._orig_mod.module."):
+                orig_mod_ckpt = True
+            elif key.startswith("module."):
                 ddp_ckpt = True
-        if ddp_ckpt:
+        if orig_mod_ckpt:
+            prefix = '._orig_mod.module.'
+        elif ddp_ckpt:
             prefix = 'module.'
         else:
             prefix = None
-    
+
     if prefix is None:
         return ckpt
     else:
-        ckpt = {k[len(prefix):] : v for (k,v) in ckpt.items() if k.startswith(prefix)}
-    
+        ckpt = {k[len(prefix):]: v for (k, v) in ckpt.items() if k.startswith(prefix)}
     return ckpt
 
 def find_unused_params(model):
