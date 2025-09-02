@@ -14,3 +14,6 @@ def get_loader(data_id, batch_size, **data_kwargs):
     elif data_id == "cod_s3_mixed":
         from . import s3_cod_latent_mixed
         return s3_cod_latent_mixed.get_loader(batch_size, **data_kwargs)
+    elif data_id == "local_waveform":
+        from . import local_waveform
+        return local_waveform.get_loader(batch_size, **data_kwargs)

@@ -31,3 +31,9 @@ def get_sampler_cls(sampler_id):
         """
         from .av_caching import AVCachingOneStepSampler
         return AVCachingOneStepSampler
+    elif sampler_id == "audio_caching":
+        """
+        Audio-only sampler with KV caching for unconditional generation
+        """
+        from .audio_caching import AudioCachingSampler
+        return AudioCachingSampler

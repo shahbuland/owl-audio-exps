@@ -14,6 +14,8 @@ def get_rope_cls(cls_name):
         return OrthoRoPE
     elif cls_name == "motion":
         return MotionRoPE
+    elif cls_name == "audio1d":
+        return Audio1DRoPE
     else:
         raise ValueError(f"Invalid RoPE class: {cls_name}")
 
@@ -148,6 +150,33 @@ class MotionRoPE(RoPE):
         x_pos, y_pos, t_pos = eo.rearrange(interleaved, 'd f n -> d (f n)').unbind(0)
 
         return x_pos, y_pos, t_pos
+
+
+class Audio1DRoPE(RoPE):
+    """
+    Simple 1D RoPE for audio sequences operating purely on temporal dimension.
+    """
+    def get_freqs(self, config):
+        # For audio, we only have temporal dimension
+        n_latents = config.n_frames  # reinterpreted as n_latent_samples  
+        head_dim = config.d_model // config.n_heads
+        
+        pos_emb = RotaryEmbedding(
+            dim=head_dim, 
+            freqs_for='lang',
+            max_freq=10000
+        )
+        
+        # Create 1D temporal positions for each latent
+        positions = torch.arange(n_latents, dtype=torch.float32)
+        
+        # Get base frequencies [head_dim]
+        base_freqs = pos_emb.freqs  # [head_dim]
+        
+        # Compute angles for each position: [n_latents, head_dim]
+        angles = positions[:, None] * base_freqs[None, :]
+        
+        return angles
 
 
 def visaulize_rope_freqs():

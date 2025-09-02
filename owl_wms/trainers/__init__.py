@@ -29,3 +29,9 @@ def get_trainer_cls(trainer_id):
         """
         from .prune_vid_only import DistillODETrainer
         return DistillODETrainer
+    if trainer_id == "audio_rft":
+        """
+        Audio RFT trainer for unconditional audio generation
+        """
+        from .audio_rft_trainer import AudioRFTTrainer
+        return AudioRFTTrainer

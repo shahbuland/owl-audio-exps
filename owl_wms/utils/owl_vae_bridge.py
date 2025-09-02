@@ -5,9 +5,7 @@ import torch
 from diffusers import AutoencoderDC
 
 sys.path.append("./owl-vaes")
-from owl_vaes.utils.proxy_init import load_proxy_model
-from owl_vaes.models import get_model_cls
-from owl_vaes.configs import Config
+from owl_vaes import from_pretrained
 
 def _get_decoder_only():
     model = load_proxy_model(
@@ -26,12 +24,7 @@ def get_decoder_only(vae_id, cfg_path, ckpt_path):
             del model.encoder
             return model.decoder
         else:
-            cfg = Config.from_yaml(cfg_path).model
-            model = get_model_cls(cfg.model_id)(cfg)
-            try:
-                model.load_state_dict(torch.load(ckpt_path, map_location='cpu',weights_only=False))
-            except:
-                model.decoder.load_state_dict(torch.load(ckpt_path, map_location='cpu',weights_only=False))
+            model = from_pretrained(cfg_path, ckpt_path)
             del model.encoder
             model = model.decoder
             model = model.bfloat16().cuda().eval()
@@ -57,19 +50,71 @@ def make_batched_decode_fn(decoder, batch_size = 8):
     return decode
 
 @torch.no_grad()
-def make_batched_audio_decode_fn(decoder, batch_size = 8):
+def make_batched_audio_decode_fn(decoder, batch_size=8, max_seq_len=120):
     def decode(x):
-        # x is [b,n,c] audio samples
-        x = x.transpose(1,2)
-        b,c,n = x.shape
+        # x is [b,n,c] audio latents
+        b, n, c = x.shape
+        
+        # If sequence is within VAE's training length, use original approach
+        if n <= max_seq_len:
+            x = x.transpose(1, 2)  # [b,c,n]
+            batches = x.contiguous().split(batch_size)
+            batch_out = []
+            for batch in batches:
+                batch_out.append(decoder(batch).bfloat16())
+            
+            x = torch.cat(batch_out)  # [b,c,n]
+            x = x.transpose(-1, -2).contiguous()  # [b,n,2]
+            return x
+        
+        # For longer sequences, use sliding window approach
+        x = x.transpose(1, 2)  # [b,c,n]
+        
+        # Split into windows of max_seq_len
+        windows = []
+        for start in range(0, n, max_seq_len):
+            end = min(start + max_seq_len, n)
+            window = x[:, :, start:end]  # [b,c,window_len]
+            
+            # Batch this window across batch dimension
+            batches = window.contiguous().split(batch_size)
+            batch_out = []
+            for batch in batches:
+                batch_out.append(decoder(batch).bfloat16())
+            
+            window_decoded = torch.cat(batch_out)  # [b,c,decoded_len]
+            windows.append(window_decoded)
+        
+        # Concatenate all windows along sequence dimension
+        x = torch.cat(windows, dim=2)  # [b,c,total_decoded_len]
+        x = x.transpose(-1, -2).contiguous()  # [b,total_decoded_len,2]
+        
+        return x
+    return decode
 
+def get_audio_encoder_decoder(cfg_path, ckpt_path):
+    """Get both encoder and decoder for audio VAE using from_pretrained"""
+    model = from_pretrained(cfg_path, ckpt_path)
+    
+    encoder = model.encoder.bfloat16().cuda().eval()
+    decoder = model.decoder.bfloat16().cuda().eval()
+    return encoder, decoder
+
+@torch.no_grad()
+def make_batched_audio_encode_fn(encoder, batch_size=8):
+    """Create batched encoding function for audio waveforms"""
+    def encode(x):
+        # x is [b, n_samples, 2] raw waveforms
+        x = x.transpose(1, 2)  # [b, 2, n_samples]
+        b, c, n = x.shape
+        
         batches = x.contiguous().split(batch_size)
         batch_out = []
         for batch in batches:
-            batch_out.append(decoder(batch).bfloat16())
-
-        x = torch.cat(batch_out) # [b,c,n]
-        x = x.transpose(-1,-2).contiguous() # [b,n,2]
-
+            batch_out.append(encoder(batch).bfloat16())
+        
+        x = torch.cat(batch_out)  # [b, latent_channels, n_latents] 
+        x = x.transpose(-1, -2).contiguous()  # [b, n_latents, latent_channels]
+        
         return x
-    return decode
+    return encode
